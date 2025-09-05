@@ -12,7 +12,7 @@ from .player import Player
 
 def run():
     pygame.init()
-    pygame.display.set_caption("Gravity Guide — playable baseline")
+    pygame.display.set_caption("Gravity Guy — playable baseline")
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
@@ -55,6 +55,7 @@ def run():
             prev_y = player.y
             player.update_physics(dt)
             plat_rects = [p.rect for p in level.platforms]
+            _ = player.resolve_side_collisions(plat_rects)
             _, crushed = player.resolve_collisions_swept(prev_y, plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S

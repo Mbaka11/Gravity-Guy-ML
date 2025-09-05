@@ -4,7 +4,7 @@ HEIGHT = 540
 FPS = 60
 
 # --- World / Physics ---
-SCROLL_PX_PER_S = 220.0     # map scroll speed (px/s)
+SCROLL_PX_PER_S = 250.0     # map scroll speed (px/s)
 G_ABS = 1800.0              # gravity magnitude (px/s^2), sign = gravity direction
 JUMP_COOLDOWN_S = 0.18      # anti “ping-pong” between flips (sec)
 
@@ -12,7 +12,7 @@ JUMP_COOLDOWN_S = 0.18      # anti “ping-pong” between flips (sec)
 PLAYER_X = 220              # player’s fixed x (world scrolls left)
 PLAYER_W = 32
 PLAYER_H = 32
-MAX_VY = 900.0              # clamp vertical velocity
+MAX_VY = 1200.0              # clamp vertical velocity
 
 # --- Level generation ---
 PLATFORM_THICKNESS = 24
@@ -31,3 +31,9 @@ COLOR_FG = (220, 232, 255)
 COLOR_ACCENT = (120, 200, 255)
 COLOR_PLAT = (33, 46, 68)
 COLOR_DANGER = (255, 86, 110)
+
+HITBOX_PAD_X = 0   # horizontal padding in px
+HITBOX_PAD_Y = 0   # vertical padding in px
+
+ENABLE_STAIRS = False
+STAIR_PROB = 0.2
