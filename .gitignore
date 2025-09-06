@@ -1,7 +1,7 @@
 # Ignorer l'environnement virtuel
 venv/
-ENV/
-env/
+# ENV/
+# env/
 .venv/
 
 # Fichiers Python
