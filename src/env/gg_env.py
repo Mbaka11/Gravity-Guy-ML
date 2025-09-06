@@ -1,1 +1,203 @@
 # src/env/gg_env.py
+"""
+Purpose
+-------
+Headless, Gym-like wrapper around the Gravity-Guide game so agents can train
+without opening a Pygame window. Exposes the minimal reset/step API:
+
+    obs = env.reset(level_seed=None)
+    obs, reward, done, info = env.step(action)
+
+Observation uses the helper in `observations.py` (6-D vector).
+Actions are discrete: 0=do nothing, 1=flip gravity.
+
+Summary
+-------
+- Fixed small timestep (dt) for determinism and speed.
+- Reward = horizontal progress (scroll distance per step) minus an optional flip penalty.
+- Episode ends when the player goes off-screen or when a time limit is reached.
+- Seeds:
+    * level_seed controls procedural layout (None = random each reset)
+    * rng_seed reserved for future stochasticity in the env/agent
+
+Args (constructor)
+------------------
+level_seed : Optional[int]
+    Seed for level generation. None -> random per reset.
+rng_seed : Optional[int]
+    Seed for env RNG (reserved for future noise/augmentations).
+max_time_s : float
+    Time limit per episode in seconds (prevents infinite episodes).
+flip_penalty : float
+    Reward penalty applied when action==1 (flip).
+dt : float
+    Fixed simulation step (seconds). Smaller -> more accurate, slower.
+
+Returns (API)
+-------------
+reset(...) -> obs : List[float]
+step(action:int) -> (obs: List[float], reward: float, done: bool, info: dict)
+"""
+
+from __future__ import annotations
+from typing import Optional, List, Tuple, Dict
+import pygame
+
+from ..game.config import (
+    WIDTH, HEIGHT, SCROLL_PX_PER_S, PLAYER_X, PLAYER_H
+)
+from ..game.level import LevelGen
+from ..game.player import Player
+from .observations import build_observation
+
+class GGEnv:
+    """
+    Minimal headless environment for Gravity-Guide.
+
+    Action space: 2 (0=NOOP, 1=FLIP)
+    Observation: 6 floats (see observations.build_observation)
+    """
+    
+    def __init__(
+        self,
+        level_seed: Optional[int] = None,
+        rng_seed: Optional[int] = None,
+        max_time_s: float = 60.0,
+        flip_penalty: float = 0.01,
+        dt: float = 1.0 / 120.0,
+    ):
+        self.level_seed = level_seed
+        self.rng_seed = rng_seed
+        self.max_time_s = max_time_s
+        self.flip_penalty = flip_penalty
+        self.dt = dt
+        
+        # Runtime state set in reset()
+        self.level: Optional[LevelGen] = None
+        self.player: Optional[Player] = None
+        self.time_s: float = 0.0
+        self.distance_px: float = 0.0
+        self.current_level_seed: Optional[int] = None  # resolved seed used by LevelGen
+        
+    def reset(self, level_seed: Optional[int] = None) -> List[float]:
+        """
+        Summary
+        -------
+        Start a new episode and return the first observation.
+
+        Args
+        ----
+        level_seed : Optional[int]
+            If provided, overrides the environment's default seed for this reset.
+            Use None to let the LevelGen randomize the layout.
+
+        Returns
+        -------
+        List[float]
+            The initial observation (6-D vector).
+        """
+        # Resolve which seed to use for this episode
+        seed_spec = self.level_seed if level_seed is None else level_seed
+
+        # Create level (support both LevelGen(seed=...) and LevelGen(...))
+        try:
+            level = LevelGen(seed=seed_spec)
+        except TypeError:
+            level = LevelGen(seed_spec)
+
+        # Spawn player roughly mid-height
+        player = Player(
+            x=float(PLAYER_X),
+            y=HEIGHT / 2 - PLAYER_H / 2,
+            vy=0.0,
+            grav_dir=1,
+            grounded=False,
+        )
+
+        # Reset episode bookkeeping
+        self.level = level
+        self.player = player
+        self.time_s = 0.0
+        self.distance_px = 0.0
+        self.current_level_seed = getattr(level, "seed", seed_spec)
+
+        # One collision settle so 'grounded' is consistent if we spawn on a platform
+        plat_rects = [p.rect for p in self.level.platforms]
+        prev_y = self.player.y
+        # Keep the same order we found stable in-game:
+        self.player.resolve_side_collisions(plat_rects)
+        self.player.resolve_collisions_swept(prev_y, plat_rects)
+
+        obs = build_observation(self.player, plat_rects)
+        return obs
+    
+    def step(self, action: int) -> Tuple[List[float], float, bool, Dict]:
+        """
+        Summary
+        -------
+        Advance the simulation by one fixed step given an action.
+
+        Args
+        ----
+        action : int
+            0 = do nothing, 1 = flip gravity (attempt; flip only occurs if grounded & cooldown ok).
+
+        Returns
+        -------
+        obs : List[float]
+            Next observation (6-D vector).
+        reward : float
+            Progress-based reward minus optional flip penalty.
+        done : bool
+            True if the episode terminated (off-screen or time limit).
+        info : dict
+            Diagnostics: elapsed time, distance, level seed.
+        """
+        assert self.level is not None and self.player is not None, "Call reset() first."
+
+        # Apply action
+        if action == 1:
+            self.player.try_flip()
+
+        # Update world (headless): level first, then player physics + collisions
+        self.level.update_and_generate(self.dt)
+
+        prev_y = self.player.y
+        self.player.update_physics(self.dt)
+
+        plat_rects = [p.rect for p in self.level.platforms]
+        # Keep collision order consistent with your playable loop
+        self.player.resolve_side_collisions(plat_rects)
+        self.player.resolve_collisions_swept(prev_y, plat_rects)
+
+        # Reward: horizontal progress minus flip penalty (if any)
+        step_progress = self.dt * SCROLL_PX_PER_S
+        reward = step_progress - (self.flip_penalty if action == 1 else 0.0)
+
+        # Episode termination
+        self.time_s += self.dt
+        self.distance_px += step_progress
+        out_of_bounds = (self.player.y < -80) or (self.player.y > HEIGHT + 80)
+        time_up = self.time_s >= self.max_time_s
+        done = bool(out_of_bounds or time_up)
+
+        obs = build_observation(self.player, plat_rects)
+        info = {
+            "time_s": self.time_s,
+            "distance_px": self.distance_px,
+            "level_seed": self.current_level_seed,
+            "out_of_bounds": out_of_bounds,
+            "time_up": time_up,
+        }
+        return obs, float(reward), done, info
+
+    # Small helpers (optional)
+    @property
+    def action_space_n(self) -> int:
+        """Number of discrete actions (2)."""
+        return 2
+
+    @property
+    def observation_size(self) -> int:
+        """Length of the observation vector (6)."""
+        return 6

@@ -9,6 +9,10 @@ from .config import (
 )
 from .level import LevelGen
 from .player import Player
+from src.env.observations import build_observation
+
+
+TEST_OBSERVATIONS_LOGS = False
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -26,6 +30,9 @@ def run():
         launch_seed = None  # signals LevelGen to randomize
     else:
         launch_seed = args.seed
+
+    # Test observations
+    _print_timer = 0.0 if TEST_OBSERVATIONS_LOGS else None
 
     pygame.init()
     pygame.display.set_caption("Gravity Guide — playable baseline")
@@ -79,9 +86,19 @@ def run():
             _ = player.resolve_side_collisions(plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S
-            out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
-            if out_of_bounds:
-                alive = False
+            #TEST observations
+            if _print_timer is not None :
+                _print_timer -= dt
+                if _print_timer <= 0.0:
+                    _print_timer = 0.5  # print twice per second
+                    plat_rects = [p.rect for p in level.platforms]
+                    obs = build_observation(player, plat_rects)
+                    # pretty debug: y, vy, g, probes
+                    print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded}")
+                    
+                out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
+                if out_of_bounds:
+                    alive = False
 
         # --- Render ---
         screen.fill(COLOR_BG)
