@@ -21,7 +21,7 @@ from typing import List
 import pygame
 from ..game.config import (HEIGHT, WIDTH, PLAYER_H, PLAYER_W, MAX_VY)
 
-PROBE_OFFSETS = (120, 240, 360) # Horizontal lookahead offsets (in pixels) where we "peek" ahead of the player.
+PROBE_OFFSETS = (60, 180, 300) # Horizontal lookahead offsets (in pixels) where we "peek" ahead of the player.
 MAX_CLEARANCE = HEIGHT # Maximum clearance used to clamp/normalize probe distances into [0, 1].
 # If we don't find a platform at that x-column, we treat clearance as this cap.
 

@@ -155,39 +155,47 @@ class GGEnv:
         """
         assert self.level is not None and self.player is not None, "Call reset() first."
 
-        # Apply action
+        # --- apply action and detect if a flip actually occurred
+        prev_grav = self.player.grav_dir
         if action == 1:
             self.player.try_flip()
+        did_flip = (self.player.grav_dir != prev_grav)
 
-        # Update world (headless): level first, then player physics + collisions
+        # --- update world headlessly
         self.level.update_and_generate(self.dt)
 
         prev_y = self.player.y
         self.player.update_physics(self.dt)
 
         plat_rects = [p.rect for p in self.level.platforms]
-        # Keep collision order consistent with your playable loop
         self.player.resolve_side_collisions(plat_rects)
         self.player.resolve_collisions_swept(prev_y, plat_rects)
 
-        # Reward: horizontal progress minus flip penalty (if any)
+        # --- reward: progress minus penalty only if the flip actually happened
         step_progress = self.dt * SCROLL_PX_PER_S
-        reward = step_progress - (self.flip_penalty if action == 1 else 0.0)
+        reward = step_progress - (self.flip_penalty if did_flip else 0.0)
 
-        # Episode termination
+        # --- episode bookkeeping
         self.time_s += self.dt
         self.distance_px += step_progress
         out_of_bounds = (self.player.y < -80) or (self.player.y > HEIGHT + 80)
         time_up = self.time_s >= self.max_time_s
         done = bool(out_of_bounds or time_up)
 
+        # --- observation (also used to expose last 3 probes in info)
         obs = build_observation(self.player, plat_rects)
+
         info = {
             "time_s": self.time_s,
             "distance_px": self.distance_px,
             "level_seed": self.current_level_seed,
             "out_of_bounds": out_of_bounds,
             "time_up": time_up,
+            "grounded": bool(self.player.grounded),
+            "cooldown": max(0.0, float(getattr(self.player, "_flip_cooldown", 0.0))),  # clamp to 0
+            "grav_dir": int(self.player.grav_dir),
+            "did_flip": bool(did_flip),        # already computed above
+            "probes": obs[3:6],
         }
         return obs, float(reward), done, info
 
