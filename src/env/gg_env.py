@@ -125,7 +125,6 @@ class GGEnv:
         plat_rects = [p.rect for p in self.level.platforms]
         prev_y = self.player.y
         # Keep the same order we found stable in-game:
-        self.player.resolve_side_collisions(plat_rects)
         self.player.resolve_collisions_swept(prev_y, plat_rects)
 
         obs = build_observation(self.player, plat_rects)
@@ -168,7 +167,6 @@ class GGEnv:
         self.player.update_physics(self.dt)
 
         plat_rects = [p.rect for p in self.level.platforms]
-        self.player.resolve_side_collisions(plat_rects)
         self.player.resolve_collisions_swept(prev_y, plat_rects)
 
         # --- reward: progress minus penalty only if the flip actually happened
@@ -179,6 +177,8 @@ class GGEnv:
         self.time_s += self.dt
         self.distance_px += step_progress
         out_of_bounds = (self.player.y < -80) or (self.player.y > HEIGHT + 80)
+        if out_of_bounds:
+            reward -= 20.0  # extra penalty for going off-screen
         time_up = self.time_s >= self.max_time_s
         done = bool(out_of_bounds or time_up)
 

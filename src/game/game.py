@@ -83,7 +83,6 @@ def run():
             plat_rects = [p.rect for p in level.platforms]
             # your collision calls here (vertical swept, then side resolve)...
             grounded, _ = player.resolve_collisions_swept(prev_y, plat_rects)
-            _ = player.resolve_side_collisions(plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S
 
@@ -94,7 +93,7 @@ def run():
             )
             if out_of_bounds:
                 alive = False
-
+                
             # TEST observations
             if _print_timer is not None:
                 _print_timer -= dt

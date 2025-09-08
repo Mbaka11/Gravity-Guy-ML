@@ -54,18 +54,18 @@ def improved_heuristic_action(obs, info_prev: dict, state: dict) -> int:
     did_flip = bool(info_prev.get("did_flip", False))
     
     # === ENHANCED DANGER CALCULATION ===
-    # Base danger with slightly different weighting
-    base_danger = max(0.85 * p1, 0.55 * p2, 0.25 * p3)
+    # Base danger similar to original but with velocity awareness
+    base_danger = max(0.8 * p1, 0.5 * p2, 0.3 * p3)
     
-    # Velocity consideration: if moving fast toward obstacles, be more cautious
+    # Velocity consideration: be more cautious when moving toward obstacles
     velocity_factor = 1.0
-    if abs(vy_norm) > 0.4:  # Moving fast in any direction
-        velocity_factor = 1.2
+    if abs(vy_norm) > 0.4 and ((vy_norm > 0 and grav_dir > 0) or (vy_norm < 0 and grav_dir < 0)):
+        velocity_factor = 1.3  # Stronger adjustment when moving toward danger
     
     danger = min(1.0, base_danger * velocity_factor)
     
-    # === SLIGHTLY MORE AGGRESSIVE THRESHOLDS ===
-    HI, LO = 0.25, 0.12  # vs original 0.30, 0.15
+    # === BALANCED THRESHOLDS ===
+    HI, LO = 0.28, 0.14  # Close to original but slightly more responsive
     
     # === ANTI-THRASHING LOGIC ===
     flip_count = state.get("recent_flips", 0)
@@ -109,11 +109,11 @@ def conservative_heuristic_action(obs, info_prev: dict, state: dict) -> int:
     
     did_flip = bool(info_prev.get("did_flip", False))
     
-    # Only care about immediate danger (nearest probe)
-    danger = p1
+    # Consider immediate and medium-range danger, ignore far probe
+    danger = max(0.9 * p1, 0.4 * p2)  # Focus on near threats but don't ignore medium range
     
-    # Very tight thresholds - only flip when obstacle is very close
-    HI, LO = 0.20, 0.08
+    # Conservative thresholds - only flip when really necessary
+    HI, LO = 0.35, 0.20
     
     pending = state.get("pending_flip", False)
     
@@ -141,11 +141,11 @@ def aggressive_heuristic_action(obs, info_prev: dict, state: dict) -> int:
     
     did_flip = bool(info_prev.get("did_flip", False))
     
-    # Weight all probes more heavily for earlier warning
-    danger = max(0.9 * p1, 0.7 * p2, 0.4 * p3)
+    # Weight near and medium probes heavily for early warning
+    danger = max(0.85 * p1, 0.65 * p2, 0.35 * p3)
     
-    # More aggressive thresholds
-    HI, LO = 0.40, 0.20  # vs original 0.30, 0.15
+    # Aggressive but not overly cautious thresholds
+    HI, LO = 0.32, 0.18  # Flip earlier than original but not too early
     
     pending = state.get("pending_flip", False)
     
@@ -169,9 +169,9 @@ def run_policy_test(
     steps_per_ep: int = 1200,
     flip_prob: float = 0.12,
     level_seed: Optional[int] = None,
-    rng_seed: Optional[int] = 0,
+    rng_seed: Optional[int] = None,
     policy: str = "random",
-    max_time_s: float = 10.0,
+    max_time_s: float = 30.0,
 ):
     """
     Run episodes with a specific policy and save results.
@@ -185,8 +185,6 @@ def run_policy_test(
         policy: Policy name ("random", "heuristic", "improved", "conservative", "aggressive")
         max_time_s: Maximum time per episode in seconds
     """
-    if rng_seed is not None:
-        random.seed(rng_seed)
 
     os.makedirs("experiments/runs", exist_ok=True)
     out_path = f"experiments/runs/{int(time.time())}_{policy}.jsonl"
@@ -284,7 +282,7 @@ def run_comparison():
             n_episodes=8,
             steps_per_ep=3600,  # 30 seconds at 120fps
             level_seed=None,    # Random levels
-            rng_seed=0,         # Reproducible random actions
+            rng_seed=None,      # No fixed seed, so random actions
             policy=policy,
             max_time_s=30.0,    # Longer time limit to see true potential
             **kwargs
@@ -292,11 +290,11 @@ def run_comparison():
 
 if __name__ == "__main__":
     # Quick test with short time limit
-    print("=== QUICK TEST (10s limit) ===")
-    run_policy_test(policy="random", n_episodes=3, max_time_s=10.0)
-    run_policy_test(policy="heuristic", n_episodes=3, max_time_s=10.0)
-    run_policy_test(policy="improved", n_episodes=3, max_time_s=10.0)
-    
+    print("=== QUICK TEST (30s limit) ===")
+    run_policy_test(policy="random", n_episodes=3, max_time_s=30.0)
+    run_policy_test(policy="heuristic", n_episodes=3, max_time_s=30.0)
+    run_policy_test(policy="improved", n_episodes=3, max_time_s=30.0)
+
     print("\n" + "="*50)
     
     # Full comparison with longer time limit
