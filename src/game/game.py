@@ -50,7 +50,7 @@ def run():
     level, player, distance_px, alive, current_seed = reset_world(launch_seed)
     font = pygame.font.SysFont("jetbrainsmono", 18)
 
-    btn_w, btn_h = 220, 80  # wider and taller to fit both options
+    btn_w, btn_h = 180, 44
     restart_rect = pygame.Rect((WIDTH - btn_w)//2, (HEIGHT - btn_h)//2, btn_w, btn_h)
 
     while True:
@@ -83,19 +83,11 @@ def run():
             plat_rects = [p.rect for p in level.platforms]
             # your collision calls here (vertical swept, then side resolve)...
             grounded, _ = player.resolve_collisions_swept(prev_y, plat_rects)
+            _ = player.resolve_side_collisions(plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S
-
-            # Out of bounds check (x or y)
-            out_of_bounds = (
-                player.y < -80 or player.y > HEIGHT + 80 or
-                player.x < -PLAYER_W or player.x > WIDTH + PLAYER_W
-            )
-            if out_of_bounds:
-                alive = False
-                
-            # TEST observations
-            if _print_timer is not None:
+            #TEST observations
+            if _print_timer is not None :
                 _print_timer -= dt
                 if _print_timer <= 0.0:
                     _print_timer = 0.5  # print twice per second
@@ -103,6 +95,10 @@ def run():
                     obs = build_observation(player, plat_rects)
                     # pretty debug: y, vy, g, probes
                     print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded}")
+                    
+                out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
+                if out_of_bounds:
+                    alive = False
 
         # --- Render ---
         screen.fill(COLOR_BG)
@@ -120,12 +116,11 @@ def run():
             pygame.draw.rect(screen, (40, 60, 90), restart_rect, border_radius=10)
             pygame.draw.rect(screen, (90, 130, 180), restart_rect, width=2, border_radius=10)
             btn_txt = font.render("Restart (R)", True, (220, 235, 255))
+            screen.blit(btn_txt, (restart_rect.centerx - btn_txt.get_width()//2,
+                                  restart_rect.centery - btn_txt.get_height()//2))
             btn_txt2 = font.render("New Random (N)", True, (220, 235, 255))
-            # Center both options vertically in the larger box
-            total_height = btn_txt.get_height() + btn_txt2.get_height() + 12
-            y_start = restart_rect.centery - total_height // 2
-            screen.blit(btn_txt, (restart_rect.centerx - btn_txt.get_width()//2, y_start))
-            screen.blit(btn_txt2, (restart_rect.centerx - btn_txt2.get_width()//2, y_start + btn_txt.get_height() + 12))
+            screen.blit(btn_txt2, (restart_rect.centerx - btn_txt2.get_width()//2,
+                                   restart_rect.centery - btn_txt2.get_height()//2 + 24))
 
         pygame.display.flip()
 
