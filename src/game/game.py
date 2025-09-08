@@ -50,7 +50,7 @@ def run():
     level, player, distance_px, alive, current_seed = reset_world(launch_seed)
     font = pygame.font.SysFont("jetbrainsmono", 18)
 
-    btn_w, btn_h = 180, 44
+    btn_w, btn_h = 180, 70  # Increased height to fit both messages
     restart_rect = pygame.Rect((WIDTH - btn_w)//2, (HEIGHT - btn_h)//2, btn_w, btn_h)
 
     while True:
@@ -83,7 +83,6 @@ def run():
             plat_rects = [p.rect for p in level.platforms]
             # your collision calls here (vertical swept, then side resolve)...
             grounded, _ = player.resolve_collisions_swept(prev_y, plat_rects)
-            _ = player.resolve_side_collisions(plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S
             #TEST observations
@@ -95,10 +94,11 @@ def run():
                     obs = build_observation(player, plat_rects)
                     # pretty debug: y, vy, g, probes
                     print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded}")
-                    
-                out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
-                if out_of_bounds:
-                    alive = False
+            
+            # Check for out-of-bounds death
+            out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
+            if out_of_bounds:
+                alive = False
 
         # --- Render ---
         screen.fill(COLOR_BG)
@@ -115,12 +115,16 @@ def run():
         if not alive:
             pygame.draw.rect(screen, (40, 60, 90), restart_rect, border_radius=10)
             pygame.draw.rect(screen, (90, 130, 180), restart_rect, width=2, border_radius=10)
+            
+            # First button text (Restart)
             btn_txt = font.render("Restart (R)", True, (220, 235, 255))
             screen.blit(btn_txt, (restart_rect.centerx - btn_txt.get_width()//2,
-                                  restart_rect.centery - btn_txt.get_height()//2))
+                                  restart_rect.centery - btn_txt.get_height() - 5))  # Moved up
+            
+            # Second button text (New Random)
             btn_txt2 = font.render("New Random (N)", True, (220, 235, 255))
             screen.blit(btn_txt2, (restart_rect.centerx - btn_txt2.get_width()//2,
-                                   restart_rect.centery - btn_txt2.get_height()//2 + 24))
+                                   restart_rect.centery + 5))  # Moved down
 
         pygame.display.flip()
 

@@ -55,16 +55,11 @@ class Player:
 
     def resolve_collisions_swept(self, prev_y: float, platforms: List[pygame.Rect]) -> Tuple[bool, bool]:
         """
-        Vertical swept test (top/bottom only). Side overlaps are ignored.
+        Vertical swept test (top/bottom only).
         Returns (grounded, crushed=False).
         """
-        # raw rects at previous and current positions
-        me_prev_raw = pygame.Rect(int(self.x), int(prev_y), PLAYER_W, PLAYER_H)
-        me_now_raw  = self.rect
-
-        # inner rects used for collision checks (soften side contacts)
-        me_prev = self._inner_rect(me_prev_raw)
-        me_now  = self._inner_rect(me_now_raw)
+        me_prev = pygame.Rect(int(self.x), int(prev_y), PLAYER_W, PLAYER_H)
+        me_now = self.rect
 
         grounded = False
 
@@ -75,130 +70,39 @@ class Player:
         hitting_from_above = None  # True if landing on a top; False if hitting a bottom
 
         for pr in platforms:
-            pr_inner = self._inner_rect(pr)  # also soften platforms slightly
-            horiz_overlap = (me_now.right > pr_inner.left) and (me_now.left < pr_inner.right)
+            horiz_overlap = (me_now.right > pr.left) and (me_now.left < pr.right)
             if not horiz_overlap:
                 continue
 
             if moving_down:
                 # crossing a platform TOP
-                if me_prev.bottom <= pr_inner.top and me_now.bottom >= pr_inner.top:
-                    dist = pr_inner.top - me_prev.bottom
+                if me_prev.bottom <= pr.top and me_now.bottom >= pr.top:
+                    dist = pr.top - me_prev.bottom
                     if dist >= 0 and (hit_surface_y is None or dist < (hit_surface_y - me_prev.bottom)):
-                        hit_surface_y = pr_inner.top
+                        hit_surface_y = pr.top
                         hitting_from_above = True
             else:
                 # crossing a platform BOTTOM
-                if me_prev.top >= pr_inner.bottom and me_now.top <= pr_inner.bottom:
-                    dist = me_prev.top - pr_inner.bottom
+                if me_prev.top >= pr.bottom and me_now.top <= pr.bottom:
+                    dist = me_prev.top - pr.bottom
                     if dist >= 0 and (hit_surface_y is None or dist < (me_prev.top - hit_surface_y)):
-                        hit_surface_y = pr_inner.bottom
+                        hit_surface_y = pr.bottom
                         hitting_from_above = False
 
         # Snap to contact and zero vertical velocity
         if hit_surface_y is not None:
             if moving_down and hitting_from_above:
-                # rest on platform top: set inner bottom == surface top
-                self.y = hit_surface_y - (PLAYER_H - HITBOX_PAD_Y)
+                # rest on platform top
+                self.y = hit_surface_y - PLAYER_H
                 self.vy = 0.0
                 grounded = True
             elif (not moving_down) and (hitting_from_above is False):
-                # rest against platform bottom: set inner top == surface bottom
-                self.y = hit_surface_y - HITBOX_PAD_Y    
+                # rest against platform bottom
+                self.y = hit_surface_y
                 self.vy = 0.0
                 grounded = True
 
         self.grounded = grounded
         return grounded, False  
     
-    def _min_axis_penetration(self, a: pygame.Rect, b: pygame.Rect):
-        """Return (pen_x, pen_y, side), where side∈{'left','right','top','bottom'} is the direction to push the player out."""
-        dx_left   = b.right - a.left      # if positive, overlap from left
-        dx_right  = a.right - b.left      # if positive, overlap from right
-        dy_top    = b.bottom - a.top      # overlap from top
-        dy_bottom = a.bottom - b.top      # overlap from bottom
 
-        pen_x = min(dx_left, dx_right)
-        pen_y = min(dy_top, dy_bottom)
-
-        if pen_x < pen_y:
-            # horizontal resolution
-            side = 'left' if dx_left < dx_right else 'right'
-        else:
-            side = 'top' if dy_top < dy_bottom else 'bottom'
-        return pen_x, pen_y, side
-    
-    def resolve_side_collisions(self, platforms: List[pygame.Rect]) -> bool:
-        """
-        Make platform SIDES solid without killing:
-        - Prefer horizontal resolution (no corner slip).
-        - Clamp when very close to the side even if overlap is ~0 (prevents slow bleed-through).
-        - Skip pushing when airborne so flips don't feel delayed.
-        Returns True if we pushed horizontally.
-        """
-        # If we're clearly airborne and moving away, do nothing (flips feel snappy)
-        if not self.grounded and abs(self.vy) > 10:
-            return False
-
-        pushed = False
-        me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-
-        # How close counts as "touching" even if not overlapping
-        PROX_EPS = 2  # px
-        # Horizontal bias: if widths/heights are similar, treat as side contact
-        H_BIAS = 4    # px
-
-        for pr in platforms:
-            pr_in = pr.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-
-            # Compute intersection; may be empty
-            inter = me.clip(pr_in)
-
-            # If there is *some* vertical overlap region, we may need a horizontal clamp
-            vertical_overlap = inter.height > 0
-
-            # Distances to platform vertical edges (positive even if not overlapping)
-            dist_to_left  = abs(me.right - pr_in.left)
-            dist_to_right = abs(me.left  - pr_in.right)
-
-            need_prox_clamp = vertical_overlap and (dist_to_left <= PROX_EPS or dist_to_right <= PROX_EPS)
-
-            if inter.width > 0 and inter.height > 0:
-                # Real overlap: choose axis with a bias toward horizontal
-                if inter.width + H_BIAS <= inter.height:
-                    # Horizontal resolution
-                    if me.centerx < pr_in.centerx:
-                        # player is left of wall → push left
-                        self.x = pr_in.left - (PLAYER_W + HITBOX_PAD_X + 1)
-                    else:
-                        # player is right of wall → push right
-                        self.x = pr_in.right + (HITBOX_PAD_X + 1)
-                    pushed = True
-                    # refresh shrunken rect after moving
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-                else:
-                    # Mostly vertical overlap — vertical swept solver already handled it.
-                    # Do nothing here to avoid fighting the vertical correction.
-                    pass
-
-            elif need_prox_clamp:
-                # No overlap but we're *just* at the side → clamp to keep it solid
-                if dist_to_left <= PROX_EPS:
-                    self.x = pr_in.left - (PLAYER_W + HITBOX_PAD_X + 1)
-                    pushed = True
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-                elif dist_to_right <= PROX_EPS:
-                    self.x = pr_in.right + (HITBOX_PAD_X + 1)
-                    pushed = True
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-
-        # Optional: very light recenter to PLAYER_X when not touching anything,
-        # so pushes don't drift you away forever (comment out if you prefer raw drift):
-        # if not pushed:
-        #     anchor = PLAYER_X
-        #     snap_speed = 800.0  # px/s; call this with dt if you want smooth
-        #     dx = anchor - self.x
-        #     if abs(dx) < 1.0:
-        #         self.x = anchor
-
-        return pushed
