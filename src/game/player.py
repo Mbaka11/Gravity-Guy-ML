@@ -4,7 +4,7 @@ import pygame
 from dataclasses import dataclass
 from typing import List, Tuple
 from .config import (
-    PLAYER_X, PLAYER_W, PLAYER_H, G_ABS, MAX_VY, JUMP_COOLDOWN_S, HITBOX_PAD_X, HITBOX_PAD_Y
+    PLAYER_X, PLAYER_W, PLAYER_H, G_ABS, MAX_VY, JUMP_COOLDOWN_S
 )
 
 @dataclass
@@ -26,10 +26,8 @@ class Player:
         return pygame.Rect(int(self.x), int(self.y), PLAYER_W, PLAYER_H)
     
     def _inner_rect(self, rect: pygame.Rect) -> pygame.Rect:
-        r = rect.copy()
-        # shrink the hitbox so that touching side walls doesn’t register as a blocking overlap
-        r.inflate_ip(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-        return r
+        # No hitbox shrinkage needed now; just return the rect as-is
+        return rect
 
     def try_flip(self):
         """Flip gravity only if grounded and cooldown elapsed."""
@@ -99,13 +97,13 @@ class Player:
         # Snap to contact and zero vertical velocity
         if hit_surface_y is not None:
             if moving_down and hitting_from_above:
-                # rest on platform top: set inner bottom == surface top
-                self.y = hit_surface_y - (PLAYER_H - HITBOX_PAD_Y)
+                # rest on platform top: set player bottom == surface top
+                self.y = hit_surface_y - PLAYER_H
                 self.vy = 0.0
                 grounded = True
             elif (not moving_down) and (hitting_from_above is False):
-                # rest against platform bottom: set inner top == surface bottom
-                self.y = hit_surface_y - HITBOX_PAD_Y    
+                # rest against platform bottom: set player top == surface bottom
+                self.y = hit_surface_y
                 self.vy = 0.0
                 grounded = True
 
@@ -142,7 +140,7 @@ class Player:
             return False
 
         pushed = False
-        me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
+        me = self.rect
 
         # How close counts as "touching" even if not overlapping
         PROX_EPS = 2  # px
@@ -150,7 +148,7 @@ class Player:
         H_BIAS = 4    # px
 
         for pr in platforms:
-            pr_in = pr.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
+            pr_in = pr
 
             # Compute intersection; may be empty
             inter = me.clip(pr_in)
@@ -158,40 +156,21 @@ class Player:
             # If there is *some* vertical overlap region, we may need a horizontal clamp
             vertical_overlap = inter.height > 0
 
-            # Distances to platform vertical edges (positive even if not overlapping)
-            dist_to_left  = abs(me.right - pr_in.left)
-            dist_to_right = abs(me.left  - pr_in.right)
-
-            need_prox_clamp = vertical_overlap and (dist_to_left <= PROX_EPS or dist_to_right <= PROX_EPS)
-
             if inter.width > 0 and inter.height > 0:
                 # Real overlap: choose axis with a bias toward horizontal
                 if inter.width + H_BIAS <= inter.height:
                     # Horizontal resolution
                     if me.centerx < pr_in.centerx:
                         # player is left of wall → push left
-                        self.x = pr_in.left - (PLAYER_W + HITBOX_PAD_X + 1)
+                        self.x = pr_in.left - PLAYER_W - 1
                     else:
                         # player is right of wall → push right
-                        self.x = pr_in.right + (HITBOX_PAD_X + 1)
+                        self.x = pr_in.right + 1
                     pushed = True
-                    # refresh shrunken rect after moving
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
+                    me = self.rect
                 else:
                     # Mostly vertical overlap — vertical swept solver already handled it.
-                    # Do nothing here to avoid fighting the vertical correction.
                     pass
-
-            elif need_prox_clamp:
-                # No overlap but we're *just* at the side → clamp to keep it solid
-                if dist_to_left <= PROX_EPS:
-                    self.x = pr_in.left - (PLAYER_W + HITBOX_PAD_X + 1)
-                    pushed = True
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
-                elif dist_to_right <= PROX_EPS:
-                    self.x = pr_in.right + (HITBOX_PAD_X + 1)
-                    pushed = True
-                    me = self.rect.inflate(-2 * HITBOX_PAD_X, -2 * HITBOX_PAD_Y)
 
         # Optional: very light recenter to PLAYER_X when not touching anything,
         # so pushes don't drift you away forever (comment out if you prefer raw drift):

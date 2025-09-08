@@ -6,8 +6,8 @@ from typing import List, Tuple, Optional
 import pygame
 from .config import (
     WIDTH, HEIGHT, PLATFORM_THICKNESS, LANE_TOP_Y, LANE_BOT_Y,
-    SEGMENT_MIN_W, SEGMENT_MAX_W, GAP_MIN_W, GAP_MAX_W, STAIR_STEP,
-    SCROLL_PX_PER_S,ENABLE_STAIRS, STAIR_PROB
+    SEGMENT_MIN_W, SEGMENT_MAX_W, GAP_MIN_W, GAP_MAX_W,
+    SCROLL_PX_PER_S
 )
 
 @dataclass
@@ -18,10 +18,10 @@ class Platform:
 class LevelGen:
     """
     Generates an endless ribbon of platforms scrolling left.
-    Motifs: flat segments, gaps, and simple 'stairs'.
+    Motifs: flat segments and gaps.
     Two lanes (top / bottom) to match gravity flip gameplay.
     """
-    def __init__(self, seed: int | None, enable_stairs: Optional[bool] = None):
+    def __init__(self, seed: int | None):
         # If seed is None → randomize once (per level)
         if seed is None:
             # 32-bit seed is enough and printable
@@ -29,7 +29,6 @@ class LevelGen:
         self.seed = seed
         self.rng = random.Random(seed)
         self.platforms: List[Platform] = []
-        self.enable_stairs = ENABLE_STAIRS if enable_stairs is None else enable_stairs
         self._init_start()
 
     def _init_start(self):
@@ -56,61 +55,10 @@ class LevelGen:
     def _opposite_lane(self, lane: str) -> str:
         return "bot" if lane == "top" else "top"
 
-    def _stairs(self, x: int, lane: str, total_w: int, steps: int = 3, direction: str = "auto") -> List[Platform]:
-        """
-        Directional stairs:
-        direction ∈ {"up","down","auto"}; "up" means y decreases as x increases.
-        Safety rule:
-        If the stair leans AWAY from its lane (top+down or bot+up),
-        auto-place a flat cover on the opposite lane across the stair span.
-        """
-        if direction == "auto":
-            direction = "up" if self.rng.random() < 0.5 else "down"
-
-        seg_w = max(SEGMENT_MIN_W, total_w // steps)
-        out: List[Platform] = []
-        cur_x = x
-
-        # 'up' means y decreases; 'down' means y increases (same sign semantics for both lanes)
-        sign = -1 if direction == "up" else +1
-
-        for i in range(steps):
-            if lane == "top":
-                # anchor at top line; move by sign
-                y = LANE_TOP_Y - PLATFORM_THICKNESS + sign * i * (STAIR_STEP // 2)
-            else:
-                # anchor at bottom line; move by sign
-                y = LANE_BOT_Y + sign * i * (STAIR_STEP // 2)
-            rect = pygame.Rect(cur_x, y, seg_w, PLATFORM_THICKNESS)
-            out.append(Platform(rect=rect, lane=lane))
-            cur_x += seg_w
-
-        # --- SAFETY COVER ---
-        # If stair leans away from its lane, ensure opposite-lane platform under/over it.
-        if (lane == "top" and direction == "down") or (lane == "bot" and direction == "up"):
-            other = self._opposite_lane(lane)
-            out.append(self._make_seg(x, other, total_w))
-
-            # OPTIONAL (only if flips are "grounded-only"):
-            # Provide a small overlap at stair start so the player can legally flip before committing:
-            # pad_w = min(SEGMENT_MIN_W, total_w)
-            # out.append(self._make_seg(x, lane, pad_w))   # keep original lane for pad
-            # out.append(self._make_seg(x, other, pad_w))  # overlap on other lane
-
-        return out
 
     def _next_motif(self) -> str:
-        if not self.enable_stairs:
-            # Only flat/gap when stairs are disabled
-            return "flat" if self.rng.random() < 0.6 else "gap"
-        # Stairs enabled: use your previous weights (or STAIR_PROB)
-        r = self.rng.random()
-        if r < 0.5:
-            return "flat"
-        elif r < 0.5 + (1.0 - STAIR_PROB):   # gap share = 1 - STAIR_PROB
-            return "gap"
-        else:
-            return "stairs"
+        # Only flat/gap motifs remain
+        return "flat" if self.rng.random() < 0.6 else "gap"
 
     def _rand_w(self, lo: int, hi: int) -> int:
         return int(self.rng.uniform(lo, hi))
@@ -140,10 +88,6 @@ class LevelGen:
             elif motif == "gap":
                 w = self._rand_w(GAP_MIN_W, GAP_MAX_W)
                 target += w  # empty space
-            else:  # stairs
-                total_w = self._rand_w(SEGMENT_MIN_W * 2, SEGMENT_MAX_W * 2)
-                self.platforms.extend(self._stairs(target, lane, total_w, steps=3))
-                target += total_w
 
     def draw(self, surf: pygame.Surface, color: Tuple[int, int, int]):
         for p in self.platforms:

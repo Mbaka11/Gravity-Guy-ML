@@ -22,7 +22,6 @@ SEGMENT_MIN_W = 160
 SEGMENT_MAX_W = 360
 GAP_MIN_W = 120
 GAP_MAX_W = 260
-STAIR_STEP = 40             # vertical step for “stairs”
 SEED_DEFAULT = 12345
 
 # --- Colors (RGB) ---
@@ -31,9 +30,3 @@ COLOR_FG = (220, 232, 255)
 COLOR_ACCENT = (120, 200, 255)
 COLOR_PLAT = (33, 46, 68)
 COLOR_DANGER = (255, 86, 110)
-
-HITBOX_PAD_X = 0   # horizontal padding in px
-HITBOX_PAD_Y = 0   # vertical padding in px
-
-ENABLE_STAIRS = False
-STAIR_PROB = 0.2

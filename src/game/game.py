@@ -35,7 +35,7 @@ def run():
     _print_timer = 0.0 if TEST_OBSERVATIONS_LOGS else None
 
     pygame.init()
-    pygame.display.set_caption("Gravity Guide — playable baseline")
+    pygame.display.set_caption("Gravity Guy — playable baseline")
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
@@ -50,7 +50,7 @@ def run():
     level, player, distance_px, alive, current_seed = reset_world(launch_seed)
     font = pygame.font.SysFont("jetbrainsmono", 18)
 
-    btn_w, btn_h = 180, 44
+    btn_w, btn_h = 220, 80  # wider and taller to fit both options
     restart_rect = pygame.Rect((WIDTH - btn_w)//2, (HEIGHT - btn_h)//2, btn_w, btn_h)
 
     while True:
@@ -69,7 +69,7 @@ def run():
                 if event.key == K_r and not alive:
                     # Restart SAME seed
                     level, player, distance_px, alive, current_seed = reset_world(current_seed)
-                if event.key == K_n:
+                if event.key == K_n and not alive:
                     # Restart with NEW RANDOM seed (even if still alive)
                     level, player, distance_px, alive, current_seed = reset_world(None)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and (not alive):
@@ -86,8 +86,17 @@ def run():
             _ = player.resolve_side_collisions(plat_rects)
 
             distance_px += dt * SCROLL_PX_PER_S
-            #TEST observations
-            if _print_timer is not None :
+
+            # Out of bounds check (x or y)
+            out_of_bounds = (
+                player.y < -80 or player.y > HEIGHT + 80 or
+                player.x < -PLAYER_W or player.x > WIDTH + PLAYER_W
+            )
+            if out_of_bounds:
+                alive = False
+
+            # TEST observations
+            if _print_timer is not None:
                 _print_timer -= dt
                 if _print_timer <= 0.0:
                     _print_timer = 0.5  # print twice per second
@@ -95,10 +104,6 @@ def run():
                     obs = build_observation(player, plat_rects)
                     # pretty debug: y, vy, g, probes
                     print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded}")
-                    
-                out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)
-                if out_of_bounds:
-                    alive = False
 
         # --- Render ---
         screen.fill(COLOR_BG)
@@ -110,14 +115,18 @@ def run():
         g_txt = "↓" if player.grav_dir > 0 else "↑"
         hud = f"Seed: {current_seed}   Dist: {int(distance_px)} px   Grav: {g_txt}   {'ALIVE' if alive else 'DEAD'}"
         screen.blit(font.render(hud, True, COLOR_FG), (12, 10))
-        screen.blit(font.render("SPACE flip | R restart same | N new seed | ESC quit", True, (160, 180, 210)), (12, 32))
+        screen.blit(font.render("SPACE flip | ESC quit", True, (160, 180, 210)), (12, 32))
 
         if not alive:
             pygame.draw.rect(screen, (40, 60, 90), restart_rect, border_radius=10)
             pygame.draw.rect(screen, (90, 130, 180), restart_rect, width=2, border_radius=10)
             btn_txt = font.render("Restart (R)", True, (220, 235, 255))
-            screen.blit(btn_txt, (restart_rect.centerx - btn_txt.get_width()//2,
-                                  restart_rect.centery - btn_txt.get_height()//2))
+            btn_txt2 = font.render("New Random (N)", True, (220, 235, 255))
+            # Center both options vertically in the larger box
+            total_height = btn_txt.get_height() + btn_txt2.get_height() + 12
+            y_start = restart_rect.centery - total_height // 2
+            screen.blit(btn_txt, (restart_rect.centerx - btn_txt.get_width()//2, y_start))
+            screen.blit(btn_txt2, (restart_rect.centerx - btn_txt2.get_width()//2, y_start + btn_txt.get_height() + 12))
 
         pygame.display.flip()
 
