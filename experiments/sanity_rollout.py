@@ -292,11 +292,11 @@ def run_comparison():
 
 if __name__ == "__main__":
     # Quick test with short time limit
-    print("=== QUICK TEST (10s limit) ===")
-    run_policy_test(policy="random", n_episodes=3, max_time_s=10.0)
-    run_policy_test(policy="heuristic", n_episodes=3, max_time_s=10.0)
-    run_policy_test(policy="improved", n_episodes=3, max_time_s=10.0)
-    
+    # print("=== QUICK TEST (10s limit) ===")
+    # run_policy_test(policy="random", n_episodes=3, max_time_s=30.0)
+    # run_policy_test(policy="heuristic", n_episodes=3, max_time_s=30.0)
+    # run_policy_test(policy="improved", n_episodes=3, max_time_s=30.0)
+
     print("\n" + "="*50)
     
     # Full comparison with longer time limit
