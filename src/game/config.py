@@ -49,3 +49,7 @@ SPIKE_MIN_SPACING = 24        # espacement min entre pics sur la même plateform
 COLOR_SPIKE = COLOR_DANGER
 SPIKE_MIN_SPACING = 100   # augmente si tu veux plus d’air entre pics
 SPIKE_MARGIN_X = 8       # marge vs. bords de la plateforme
+
+# --- Debug overlay ---
+DEBUG_OBS_OVERLAY = True  # set True to show Observation v2 values on screen
+OBS_PROBE_OFFSETS = (120, 240, 360)  # used by the on-screen overlay and obs v2 probes

@@ -5,12 +5,14 @@ from pygame import K_SPACE, K_ESCAPE, K_r, K_n
 from .config import (
     WIDTH, HEIGHT, FPS,
     COLOR_BG, COLOR_FG, COLOR_ACCENT, COLOR_PLAT, COLOR_DANGER,
-    PLAYER_X, PLAYER_W, PLAYER_H, SCROLL_PX_PER_S, SEED_DEFAULT
+    PLAYER_X, PLAYER_W, PLAYER_H, SCROLL_PX_PER_S, SEED_DEFAULT,
+    DEBUG_OBS_OVERLAY, OBS_PROBE_OFFSETS
 )
 from .level import LevelGen
 from .player import Player
 from src.env.observations import build_observation
 from .level import rect_intersects_triangle_strict
+from src.env.observations_v2 import build_observation_v2
 
 TEST_OBSERVATIONS_LOGS = False
 
@@ -129,6 +131,41 @@ def run():
         hud = f"Seed: {current_seed}   Dist: {int(distance_px)} px   Grav: {g_txt}   {'ALIVE' if alive else 'DEAD'}"
         screen.blit(font.render(hud, True, COLOR_FG), (12, 10))
         screen.blit(font.render("SPACE flip | ESC quit", True, (160, 180, 210)), (12, 32))
+
+        # ---- Debug Observation v2 Overlay (top-left) ----
+        if DEBUG_OBS_OVERLAY:
+            # Build the observation using rects + spikes
+            plat_rects = [p.rect for p in level.platforms]
+            obs = build_observation_v2(player, plat_rects, level.spikes)
+
+            # Draw vertical probe lines at the probe x-positions
+            for dx in OBS_PROBE_OFFSETS:
+                x = PLAYER_X + dx
+                pygame.draw.line(screen, (90, 180, 255), (x, 0), (x, HEIGHT), 1)
+
+            # Compose text lines
+            y_norm, vy_norm, grav = float(obs[0]), float(obs[1]), int(obs[2])
+            lines = [
+                f"OBS v2  y={y_norm:.2f}  vy={vy_norm:.2f}  g={grav:+d}",
+            ]
+            for i, dx in enumerate(OBS_PROBE_OFFSETS):
+                b = 3 + 4*i
+                ceil_n, floor_n, spike_top, spike_bot = obs[b:b+4]
+                lines.append(
+                    f"+{dx:>3}: ceil={ceil_n:.2f}  floor={floor_n:.2f}  T={int(spike_top)}  B={int(spike_bot)}"
+                )
+
+            # Optional: a small translucent panel for readability
+            panel_w = 320
+            panel_h = 18 * (len(lines) + 1)
+            panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+            panel.fill((10, 20, 35, 150))  # RGBA with alpha
+            screen.blit(panel, (12, 54))
+
+            # Render the lines
+            y0 = 60
+            for li, msg in enumerate(lines):
+                screen.blit(font.render(msg, True, (200, 220, 255)), (20, y0 + li*18))
 
         if not alive:
             pygame.draw.rect(screen, (40, 60, 90), restart_rect, border_radius=10)
