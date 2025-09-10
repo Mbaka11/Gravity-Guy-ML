@@ -23,14 +23,21 @@ class Platform:
     move_speed: float = 0.0  # Speed of movement
     move_time: float = 0.0   # Current time in movement cycle
     original_y: float = 0.0  # Original Y position to oscillate around
+    last_y: float = 0.0       # y au frame précédent
+    last_dy: float = 0.0      # delta y au frame courant
     
     def update_movement(self, dt: float):
         """Update moving platform position"""
         if self.platform_type == "moving":
             self.move_time += dt * self.move_speed
+            old_y = self.rect.y
             offset = self.move_range * math.sin(self.move_time)
             self.rect.y = int(self.original_y + offset)
-            
+            self.last_y = old_y
+            self.last_dy = self.rect.y - old_y
+        else:
+            self.last_y = self.rect.y
+            self.last_dy = 0.0
 @dataclass
 class Spike:
     """Un pic triangulaire attaché à une plateforme."""
@@ -65,43 +72,63 @@ class Spike:
         return pygame.Rect(min(xs), min(ys), max(xs)-min(xs), max(ys)-min(ys))
 
 
-def _point_in_triangle(p, a, b, c) -> bool:
-    """Test barycentrique: p dans triangle abc."""
+def _point_in_triangle_strict(p, a, b, c, eps=0.5) -> bool:
+    """Test barycentrique strict: p strictement à l'intérieur du triangle abc (bord exclus)."""
     (px, py) = p
     (ax, ay), (bx, by), (cx, cy) = a, b, c
-    v0x, v0y = cx-ax, cy-ay
-    v1x, v1y = bx-ax, by-ay
-    v2x, v2y = px-ax, py-ay
-    dot00 = v0x*v0x + v0y*v0y
-    dot01 = v0x*v1x + v0y*v1y
-    dot02 = v0x*v2x + v0y*v2y
-    dot11 = v1x*v1x + v1y*v1y
-    dot12 = v1x*v2x + v1y*v2y
-    inv_denom = 1.0 / max(1e-8, (dot00 * dot11 - dot01 * dot01))
-    u = (dot11 * dot02 - dot01 * dot12) * inv_denom
-    v = (dot00 * dot12 - dot01 * dot02) * inv_denom
-    return (u >= 0.0) and (v >= 0.0) and (u + v <= 1.0)
+    v0x, v0y = cx - ax, cy - ay
+    v1x, v1y = bx - ax, by - ay
+    v2x, v2y = px - ax, py - ay
+    dot00 = v0x * v0x + v0y * v0y
+    dot01 = v0x * v1x + v0y * v1y
+    dot02 = v0x * v2x + v0y * v2y
+    dot11 = v1x * v1x + v1y * v1y
+    dot12 = v1x * v2x + v1y * v2y
+    denom = (dot00 * dot11 - dot01 * dot01)
+    if abs(denom) < 1e-8:
+        return False
+    inv = 1.0 / denom
+    u = (dot11 * dot02 - dot01 * dot12) * inv
+    v = (dot00 * dot12 - dot01 * dot02) * inv
+    # strict: > eps et u+v < 1 - eps
+    return (u > eps) and (v > eps) and (u + v < 1.0 - eps)
 
-def rect_intersects_triangle(r: pygame.Rect, tri_pts) -> bool:
-    """Rect ↔ triangle: coins dans tri OU sommet tri dans rect OU arêtes qui se croisent."""
+def rect_intersects_triangle_strict(r: pygame.Rect, tri_pts, eps=0.5) -> bool:
+    """
+    Collision stricte: on exige un chevauchement net.
+    - Coins du rect strictement à l'intérieur du triangle
+    - Sommets du triangle strictement à l'intérieur du rect
+    - Arêtes qui se croisent en un point strictement intérieur aux deux segments
+    """
     A, B, C = tri_pts
-    # 1) coins du rect à l'intérieur du triangle
+
+    # Déflate un peu le rect pour éviter de mourir sur un frôlement visuel
+    r = r.inflate(-2, -2)
+
+    # 1) coins du rect strictement dans le triangle
     corners = [(r.left, r.top), (r.right, r.top), (r.right, r.bottom), (r.left, r.bottom)]
-    if any(_point_in_triangle(p, A, B, C) for p in corners):
+    if any(_point_in_triangle_strict(p, A, B, C, eps) for p in corners):
         return True
-    # 2) sommet du triangle dans le rect
-    if r.collidepoint(A) or r.collidepoint(B) or r.collidepoint(C):
+
+    # 2) sommet du triangle strictement dans le rect (bords exclus)
+    def rect_contains_strict(rc: pygame.Rect, p):
+        x, y = p
+        return (rc.left + eps) < x < (rc.right - eps) and (rc.top + eps) < y < (rc.bottom - eps)
+    if rect_contains_strict(r, A) or rect_contains_strict(r, B) or rect_contains_strict(r, C):
         return True
-    # 3) intersection d'arêtes (triangle edges vs rect edges)
-    def segs_intersect(p1, p2, p3, p4):
-        def cross(u, v): return u[0]*v[1]-u[1]*v[0]
+
+    # 3) intersection stricte des arêtes (0 < t < 1, 0 < u < 1)
+    def segs_intersect_strict(p1, p2, p3, p4):
+        def cross(u, v): return u[0]*v[1] - u[1]*v[0]
         def sub(u, v): return (u[0]-v[0], u[1]-v[1])
         r = sub(p2, p1); s = sub(p4, p3)
         denom = cross(r, s)
-        if abs(denom) < 1e-8: return False
+        if abs(denom) < 1e-8:
+            return False
         t = cross(sub(p3, p1), s) / denom
         upar = cross(sub(p3, p1), r) / denom
-        return 0 <= t <= 1 and 0 <= upar <= 1
+        return (eps < t < 1.0 - eps) and (eps < upar < 1.0 - eps)
+
     tri_edges = [(A, B), (B, C), (C, A)]
     rect_edges = [
         ((r.left, r.top), (r.right, r.top)),
@@ -111,9 +138,11 @@ def rect_intersects_triangle(r: pygame.Rect, tri_pts) -> bool:
     ]
     for e1 in tri_edges:
         for e2 in rect_edges:
-            if segs_intersect(e1[0], e1[1], e2[0], e2[1]):
+            if segs_intersect_strict(e1[0], e1[1], e2[0], e2[1]):
                 return True
+
     return False
+
 
 class LevelGen:
     """

@@ -10,7 +10,7 @@ from .config import (
 from .level import LevelGen
 from .player import Player
 from src.env.observations import build_observation
-from .level import rect_intersects_triangle  # si tu as mis le helper dans level.py
+from .level import rect_intersects_triangle_strict
 
 TEST_OBSERVATIONS_LOGS = False
 
@@ -109,7 +109,7 @@ def run():
                 tri = sp.world_points()     # <-- sans paramètre
                 aabb = sp.aabb()            # <-- sans paramètre
                 if aabb.colliderect(player_rect):
-                    if rect_intersects_triangle(player_rect, tri):
+                    if rect_intersects_triangle_strict(player_rect, tri):
                         alive = False
                         break
             
