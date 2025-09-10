@@ -30,7 +30,7 @@ class Player:
         return pygame.Rect(int(self.x), int(self.y), PLAYER_W, PLAYER_H)
 
     def can_flip(self) -> bool:
-        return (self._flip_cooldown <= 0.0) and self.grounded
+        return (self._flip_cooldown <= 0.0) and (self.grounded or self._platform_contact_buffer > 0.0)
 
     def try_flip(self) -> bool:
         """Flip gravity only if grounded and cooldown elapsed. Returns True if performed."""
@@ -63,102 +63,130 @@ class Player:
 
         # Update platform contact buffer
         if self._platform_contact_buffer > 0.0:
-            self._platform_contact_buffer -= dt
+            self._platform_contact_buffer = max(0.0, self._platform_contact_buffer - dt)
 
     def resolve_collisions_with_platforms(self, platforms: List[object]) -> Tuple[bool, bool]:
         """
-        Resolve collisions with platforms (both static and moving).
-        
-        Args:
-            platforms: List of Platform objects with .rect, .platform_type, .rect.y attributes
-            
-        Returns:
-            (grounded, collision_occurred)
+        Convention: self.y = TOP du joueur.
+        Résout collisions avec plateformes (statiques/mobiles) en gardant un léger "stick"
+        sur plateformes mobiles et en transportant le joueur via last_dy.
         """
-        player_rect = self.rect
-        collision_occurred = False
-        new_grounded = False
-        contacted_platform = None
-        
-        # Horizontal tolerance for platform edges (prevents getting stuck on edges)
-        HORIZONTAL_TOLERANCE = 2
-        
-        # Create a slightly smaller player rect for horizontal overlap check
-        # This prevents side-snagging while scrolling
+        HORIZONTAL_TOLERANCE = 2   # px, évite l'accrochage latéral
+        VERTICAL_STICK_TOL   = 3   # px, tolérance de collage
+        CONTACT_BUFFER_S     = 0.08
+
+        # Rect du joueur (TOP-based)
+        player_rect = pygame.Rect(
+            PLAYER_X - PLAYER_W // 2,
+            int(self.y),
+            PLAYER_W,
+            PLAYER_H
+        )
         check_rect = player_rect.copy()
         check_rect.inflate_ip(-HORIZONTAL_TOLERANCE * 2, 0)
-        
-        for platform in platforms:
-            platform_rect = platform.rect
-            
-            # Only check platforms that horizontally overlap with player
-            if (check_rect.right <= platform_rect.left or 
-                check_rect.left >= platform_rect.right):
-                continue
-            
-            # Check for vertical collision based on gravity direction
-            if self.grav_dir > 0:  # Gravity pulls down - check floor collision
-                if (player_rect.bottom >= platform_rect.top and 
-                    player_rect.top < platform_rect.top and
-                    self.vy >= 0):  # Only if moving down or stationary
-                    
-                    # Land on top of platform
-                    self.y = platform_rect.top - PLAYER_H
-                    self.vy = 0.0
-                    new_grounded = True
-                    collision_occurred = True
-                    contacted_platform = platform
-                    
-                    # If it's a moving platform, match its vertical movement
-                    if hasattr(platform, 'platform_type') and platform.platform_type == "moving":
-                        self._standing_on_platform = platform
-                        self._platform_contact_buffer = 0.1  # 100ms buffer
-                    
-                    break
-                    
-            else:  # Gravity pulls up - check ceiling collision
-                if (player_rect.top <= platform_rect.bottom and 
-                    player_rect.bottom > platform_rect.bottom and
-                    self.vy <= 0):  # Only if moving up or stationary
-                    
-                    # Stick to bottom of platform
-                    self.y = platform_rect.bottom
-                    self.vy = 0.0
-                    new_grounded = True
-                    collision_occurred = True
-                    contacted_platform = platform
-                    
-                    # If it's a moving platform, match its vertical movement
-                    if hasattr(platform, 'platform_type') and platform.platform_type == "moving":
-                        self._standing_on_platform = platform
-                        self._platform_contact_buffer = 0.1  # 100ms buffer
-                    
-                    break
-        
-        # Handle moving platform tracking
-        if contacted_platform != self._standing_on_platform:
-            self._standing_on_platform = contacted_platform
-        
-        # If we didn't contact any platform, check if we should maintain contact with moving platform
-        if not collision_occurred and self._standing_on_platform and self._platform_contact_buffer > 0:
-            moving_platform = self._standing_on_platform
-            if hasattr(moving_platform, 'platform_type') and moving_platform.platform_type == "moving":
-                # Try to maintain contact with the moving platform
-                if self._try_maintain_moving_platform_contact(moving_platform):
-                    new_grounded = True
-                    collision_occurred = True
+
+        new_grounded = False
+        collision_occurred = False
+        contacted_platform = None
+
+        # 0) Si on était déjà posé sur une plateforme mobile, tenter de maintenir le contact
+        if self._standing_on_platform is not None and self._platform_contact_buffer > 0.0:
+            plat = self._standing_on_platform
+            plat_rect = plat.rect
+
+            # overlap horizontal ?
+            if not (check_rect.right <= plat_rect.left or check_rect.left >= plat_rect.right):
+                if self.grav_dir > 0:
+                    # posé SUR (on veut player_rect.bottom ~ plat.top)
+                    if abs(player_rect.bottom - plat_rect.top) <= VERTICAL_STICK_TOL:
+                        # transporter avec la plateforme
+                        self.y += getattr(plat, "last_dy", 0)
+                        player_rect.top = int(self.y)
+                        new_grounded = True
+                        collision_occurred = True
                 else:
-                    # Lost contact with moving platform
-                    self._standing_on_platform = None
-                    self._platform_contact_buffer = 0.0
-        
-        # Clear platform tracking if not grounded
+                    # collé DESSOUS (on veut player_rect.top ~ plat.bottom)
+                    if abs(player_rect.top - plat_rect.bottom) <= VERTICAL_STICK_TOL:
+                        self.y += getattr(plat, "last_dy", 0)
+                        player_rect.top = int(self.y)
+                        new_grounded = True
+                        collision_occurred = True
+
+            if new_grounded and getattr(plat, "platform_type", "static") == "moving":
+                # rafraîchir un peu le buffer si on a re-capturé le contact
+                self._platform_contact_buffer = max(self._platform_contact_buffer, CONTACT_BUFFER_S / 2.0)
+
+        # 1) Balayage collisions "fraîches"
         if not new_grounded:
-            self._standing_on_platform = None
-            self._platform_contact_buffer = 0.0
-        
+            for plat in platforms:
+                plat_rect = plat.rect
+
+                # filtre horizontal
+                if (check_rect.right <= plat_rect.left) or (check_rect.left >= plat_rect.right):
+                    continue
+
+                if self.grav_dir > 0:
+                    # Atterrir SUR la plateforme (du dessus)
+                    is_crossing_top = (
+                        player_rect.bottom >= plat_rect.top and
+                        player_rect.top    <  plat_rect.top and
+                        self.vy >= 0.0
+                    )
+                    if is_crossing_top:
+                        # Snap: top = plat.top - hauteur
+                        self.y  = plat_rect.top - PLAYER_H
+                        self.vy = 0.0
+                        new_grounded = True
+                        collision_occurred = True
+                        contacted_platform = plat
+
+                        if getattr(plat, "platform_type", "static") == "moving":
+                            self.y += getattr(plat, "last_dy", 0)
+                            self._standing_on_platform = plat
+                            self._platform_contact_buffer = CONTACT_BUFFER_S
+                        break
+
+                else:
+                    # Coller SOUS la plateforme (plafond)
+                    is_crossing_bottom = (
+                        player_rect.top    <= plat_rect.bottom and
+                        player_rect.bottom >  plat_rect.bottom and
+                        self.vy <= 0.0
+                    )
+                    if is_crossing_bottom:
+                        # Snap: top = plat.bottom (car top-based)
+                        self.y  = plat_rect.bottom
+                        self.vy = 0.0
+                        new_grounded = True
+                        collision_occurred = True
+                        contacted_platform = plat
+
+                        if getattr(plat, "platform_type", "static") == "moving":
+                            self.y += getattr(plat, "last_dy", 0)
+                            self._standing_on_platform = plat
+                            self._platform_contact_buffer = CONTACT_BUFFER_S
+                        break
+
+        # 2) Gestion des états/flags
+        if new_grounded:
+            if contacted_platform is not None:
+                self._standing_on_platform = contacted_platform
+                if getattr(contacted_platform, "platform_type", "static") == "moving":
+                    self._platform_contact_buffer = CONTACT_BUFFER_S
+                else:
+                    self._platform_contact_buffer = 0.0
+        else:
+            # On conserve la plateforme en mémoire tant que le buffer > 0 (permet flip juste après)
+            if self._platform_contact_buffer <= 0.0:
+                self._standing_on_platform = None
+
         self.grounded = new_grounded
+
+        # (Optionnel) si tu maintiens un self.rect ailleurs, tu peux le synchroniser ici :
+        # self.rect.topleft = (PLAYER_X - PLAYER_W // 2, int(self.y))
+
         return new_grounded, collision_occurred
+
 
     def _resolve_horizontal_collisions(self, platforms: List[object]) -> bool:
         """

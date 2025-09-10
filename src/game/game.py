@@ -10,7 +10,7 @@ from .config import (
 from .level import LevelGen
 from .player import Player
 from src.env.observations import build_observation
-
+from .level import rect_intersects_triangle  # si tu as mis le helper dans level.py
 
 TEST_OBSERVATIONS_LOGS = False
 
@@ -76,11 +76,20 @@ def run():
                 if restart_rect.collidepoint(event.pos):
                     level, player, distance_px, alive, current_seed = reset_world(current_seed)
 
+        # player_rect = pygame.Rect(PLAYER_X - PLAYER_W//2, int(player.y) - PLAYER_H//2, PLAYER_W, PLAYER_H)
+
         if alive:
             level.update_and_generate(dt)
             prev_y = player.y
             player.update_physics(dt)
             grounded, collision_occurred = player.resolve_collisions_with_platforms(level.platforms)
+
+            player_rect = pygame.Rect(
+                PLAYER_X - PLAYER_W // 2,
+                int(player.y),
+                PLAYER_W,
+                PLAYER_H
+            )
 
             distance_px += dt * SCROLL_PX_PER_S
 
@@ -94,6 +103,15 @@ def run():
                     # Add collision debug info
                     moving_platforms = sum(1 for p in level.platforms if p.platform_type == "moving")
                     print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded} | moving_plats={moving_platforms}")
+            
+            
+            for sp in level.spikes:
+                tri = sp.world_points()     # <-- sans paramètre
+                aabb = sp.aabb()            # <-- sans paramètre
+                if aabb.colliderect(player_rect):
+                    if rect_intersects_triangle(player_rect, tri):
+                        alive = False
+                        break
             
             # Check for out-of-bounds death
             out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)

@@ -36,3 +36,16 @@ COLOR_FG = (220, 232, 255)
 COLOR_ACCENT = (120, 200, 255)
 COLOR_PLAT = (33, 46, 68)
 COLOR_DANGER = (255, 86, 110)
+
+# --- Spikes (pics) ---
+SPIKE_CHANCE = 0.25          # probabilité qu'une plateforme ait des pics
+SPIKE_MIN_PER_PLATFORM = 1
+SPIKE_MAX_PER_PLATFORM = 3
+SPIKE_HEIGHT = int(0.8 * PLATFORM_THICKNESS)   # petits triangles
+SPIKE_BASE   = SPIKE_HEIGHT                     # isocèle: base ~= hauteur
+SPIKE_MARGIN_X = 8            # distance min des bords de la plateforme
+SPIKE_MIN_SPACING = 24        # espacement min entre pics sur la même plateforme
+# Couleur: on réutilise le danger
+COLOR_SPIKE = COLOR_DANGER
+SPIKE_MIN_SPACING = 100   # augmente si tu veux plus d’air entre pics
+SPIKE_MARGIN_X = 8       # marge vs. bords de la plateforme
