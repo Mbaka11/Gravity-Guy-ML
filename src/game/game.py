@@ -80,20 +80,20 @@ def run():
             level.update_and_generate(dt)
             prev_y = player.y
             player.update_physics(dt)
-            plat_rects = [p.rect for p in level.platforms]
-            # your collision calls here (vertical swept, then side resolve)...
-            grounded, _ = player.resolve_collisions_swept(prev_y, plat_rects)
+            grounded, collision_occurred = player.resolve_collisions_with_platforms(level.platforms)
 
             distance_px += dt * SCROLL_PX_PER_S
-            #TEST observations
-            if _print_timer is not None :
+
+            # Test observations (if enabled)
+            if _print_timer is not None:
                 _print_timer -= dt
                 if _print_timer <= 0.0:
                     _print_timer = 0.5  # print twice per second
                     plat_rects = [p.rect for p in level.platforms]
                     obs = build_observation(player, plat_rects)
-                    # pretty debug: y, vy, g, probes
-                    print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded}")
+                    # Add collision debug info
+                    moving_platforms = sum(1 for p in level.platforms if p.platform_type == "moving")
+                    print(f"OBS y={obs[0]:.2f} vy={obs[1]:.2f} g={obs[2]:+.0f} p120={obs[3]:.2f} p240={obs[4]:.2f} p360={obs[5]:.2f} | grounded={player.grounded} | moving_plats={moving_platforms}")
             
             # Check for out-of-bounds death
             out_of_bounds = (player.y < -80) or (player.y > HEIGHT + 80)

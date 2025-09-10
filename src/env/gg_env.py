@@ -132,25 +132,7 @@ class GGEnv:
     
     def step(self, action: int) -> Tuple[List[float], float, bool, Dict]:
         """
-        Summary
-        -------
         Advance the simulation by one fixed step given an action.
-
-        Args
-        ----
-        action : int
-            0 = do nothing, 1 = flip gravity (attempt; flip only occurs if grounded & cooldown ok).
-
-        Returns
-        -------
-        obs : List[float]
-            Next observation (6-D vector).
-        reward : float
-            Progress-based reward minus optional flip penalty.
-        done : bool
-            True if the episode terminated (off-screen or time limit).
-        info : dict
-            Diagnostics: elapsed time, distance, level seed.
         """
         assert self.level is not None and self.player is not None, "Call reset() first."
 
@@ -163,11 +145,12 @@ class GGEnv:
         # --- update world headlessly
         self.level.update_and_generate(self.dt)
 
+        # --- update player physics
         prev_y = self.player.y
         self.player.update_physics(self.dt)
 
-        plat_rects = [p.rect for p in self.level.platforms]
-        self.player.resolve_collisions_swept(prev_y, plat_rects)
+        # --- resolve collisions with Platform objects (not just rects)
+        grounded, collision_occurred = self.player.resolve_collisions_with_platforms(self.level.platforms)
 
         # --- reward: progress minus penalty only if the flip actually happened
         step_progress = self.dt * SCROLL_PX_PER_S
@@ -182,7 +165,8 @@ class GGEnv:
         time_up = self.time_s >= self.max_time_s
         done = bool(out_of_bounds or time_up)
 
-        # --- observation (also used to expose last 3 probes in info)
+        # --- observation (use platform rects for observation system)
+        plat_rects = [p.rect for p in self.level.platforms]
         obs = build_observation(self.player, plat_rects)
 
         info = {
@@ -192,10 +176,14 @@ class GGEnv:
             "out_of_bounds": out_of_bounds,
             "time_up": time_up,
             "grounded": bool(self.player.grounded),
-            "cooldown": max(0.0, float(getattr(self.player, "_flip_cooldown", 0.0))),  # clamp to 0
+            "cooldown": max(0.0, float(getattr(self.player, "_flip_cooldown", 0.0))),
             "grav_dir": int(self.player.grav_dir),
-            "did_flip": bool(did_flip),        # already computed above
+            "did_flip": bool(did_flip),
             "probes": obs[3:6],
+            "collision_occurred": bool(collision_occurred),  # Added for debugging
+            "player_x": float(self.player.x),  # Track horizontal position
+            "off_screen_left": bool(off_screen_left),
+            "off_screen_right": bool(off_screen_right),
         }
         return obs, float(reward), done, info
 

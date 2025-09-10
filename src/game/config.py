@@ -26,7 +26,7 @@ SEED_DEFAULT = 12345
 
 # --- Moving Platform Parameters ---
 MOVING_PLATFORM_SPEED = 1.5    # radians per second (slower oscillation)
-MOVING_PLATFORM_RANGE = 60.0   # pixels up/down from center (smaller range)
+MOVING_PLATFORM_RANGE = 80.0   # pixels up/down from center (smaller range)
 MOVING_PLATFORM_CHANCE = 0.3   # probability of a platform being moving
 MIN_STATIC_BETWEEN_MOVING = 2  # minimum static platforms between moving ones
 

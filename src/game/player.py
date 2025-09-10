@@ -2,7 +2,7 @@
 from __future__ import annotations
 import pygame
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from .config import (
     PLAYER_X, PLAYER_W, PLAYER_H, G_ABS, MAX_VY, JUMP_COOLDOWN_S
 )
@@ -21,21 +21,13 @@ class Player:
     grounded: bool
     _flip_cooldown: float = 0.0
 
-    # --- anti-décrochage plateformes mobiles ---
-    _stick_time: float = 0.0          # durée restante de "stick" (s)
-    _support_y: float | None = None   # y de la surface support (top pour sol, bottom pour plafond)
-    _support_face: int = 0            # +1 = sol ; -1 = plafond ; 0 = aucun
-    _last_dt: float = 0.0             # dt de la dernière update_physics
+    # Platform tracking for moving platforms
+    _standing_on_platform: Optional[object] = None
+    _platform_contact_buffer: float = 0.0  # Small buffer time to maintain contact
 
     @property
     def rect(self) -> pygame.Rect:
         return pygame.Rect(int(self.x), int(self.y), PLAYER_W, PLAYER_H)
-    
-    def _inner_rect(self, rect: pygame.Rect) -> pygame.Rect:
-        r = rect.copy()
-        # Skin latéral pour éviter les accrochages avec les plateformes qui défilent
-        r.inflate_ip(-4, 0)  # 2 px de chaque côté (assez pour ignorer les side-snags)
-        return r
 
     def can_flip(self) -> bool:
         return (self._flip_cooldown <= 0.0) and self.grounded
@@ -47,136 +39,222 @@ class Player:
             self._flip_cooldown = JUMP_COOLDOWN_S
             self.vy = 0.0
             self.grounded = False
-            # en changeant de face, on arrête le stick courant
-            self._stick_time = 0.0
-            self._support_y = None
-            self._support_face = 0
+            # Clear platform tracking when flipping
+            self._standing_on_platform = None
+            self._platform_contact_buffer = 0.0
             return True
         return False
 
     def update_physics(self, dt: float):
         """Integrate vertical motion under signed gravity, clamp velocity."""
-        self._last_dt = float(dt)
-
         if self._flip_cooldown > 0:
             self._flip_cooldown -= dt
             if self._flip_cooldown < 0.0:
                 self._flip_cooldown = 0.0
 
-        # Appliquer la gravité
+        # Apply gravity
         self.vy += self.grav_dir * G_ABS * dt
 
         # Clamp vertical speed
-        if self.vy > MAX_VY: self.vy = MAX_VY
-        if self.vy < -MAX_VY: self.vy = -MAX_VY
+        self.vy = max(-MAX_VY, min(MAX_VY, self.vy))
 
-        # Intégrer la position
+        # Integrate position
         self.y += self.vy * dt
 
-        # Décroissance du "stick" (on le réduit après usage dans resolve, mais on assure une décroissance)
-        if self._stick_time > 0.0:
-            self._stick_time -= dt
-            if self._stick_time < 0.0:
-                self._stick_time = 0.0
+        # Update platform contact buffer
+        if self._platform_contact_buffer > 0.0:
+            self._platform_contact_buffer -= dt
 
-    def _try_stick_to_support(self, me_now: pygame.Rect, platforms: List[pygame.Rect]) -> bool:
+    def resolve_collisions_with_platforms(self, platforms: List[object]) -> Tuple[bool, bool]:
         """
-        Si on a un support récent (_stick_time > 0), essayer de "reposer" dessus même si
-        le chevauchement horizontal est limite à cause du scroll.
+        Resolve collisions with platforms (both static and moving).
+        
+        Args:
+            platforms: List of Platform objects with .rect, .platform_type, .rect.y attributes
+            
+        Returns:
+            (grounded, collision_occurred)
         """
-        if self._stick_time <= 0.0 or self._support_face == 0 or self._support_y is None:
+        player_rect = self.rect
+        collision_occurred = False
+        new_grounded = False
+        contacted_platform = None
+        
+        # Horizontal tolerance for platform edges (prevents getting stuck on edges)
+        HORIZONTAL_TOLERANCE = 2
+        
+        # Create a slightly smaller player rect for horizontal overlap check
+        # This prevents side-snagging while scrolling
+        check_rect = player_rect.copy()
+        check_rect.inflate_ip(-HORIZONTAL_TOLERANCE * 2, 0)
+        
+        for platform in platforms:
+            platform_rect = platform.rect
+            
+            # Only check platforms that horizontally overlap with player
+            if (check_rect.right <= platform_rect.left or 
+                check_rect.left >= platform_rect.right):
+                continue
+            
+            # Check for vertical collision based on gravity direction
+            if self.grav_dir > 0:  # Gravity pulls down - check floor collision
+                if (player_rect.bottom >= platform_rect.top and 
+                    player_rect.top < platform_rect.top and
+                    self.vy >= 0):  # Only if moving down or stationary
+                    
+                    # Land on top of platform
+                    self.y = platform_rect.top - PLAYER_H
+                    self.vy = 0.0
+                    new_grounded = True
+                    collision_occurred = True
+                    contacted_platform = platform
+                    
+                    # If it's a moving platform, match its vertical movement
+                    if hasattr(platform, 'platform_type') and platform.platform_type == "moving":
+                        self._standing_on_platform = platform
+                        self._platform_contact_buffer = 0.1  # 100ms buffer
+                    
+                    break
+                    
+            else:  # Gravity pulls up - check ceiling collision
+                if (player_rect.top <= platform_rect.bottom and 
+                    player_rect.bottom > platform_rect.bottom and
+                    self.vy <= 0):  # Only if moving up or stationary
+                    
+                    # Stick to bottom of platform
+                    self.y = platform_rect.bottom
+                    self.vy = 0.0
+                    new_grounded = True
+                    collision_occurred = True
+                    contacted_platform = platform
+                    
+                    # If it's a moving platform, match its vertical movement
+                    if hasattr(platform, 'platform_type') and platform.platform_type == "moving":
+                        self._standing_on_platform = platform
+                        self._platform_contact_buffer = 0.1  # 100ms buffer
+                    
+                    break
+        
+        # Handle moving platform tracking
+        if contacted_platform != self._standing_on_platform:
+            self._standing_on_platform = contacted_platform
+        
+        # If we didn't contact any platform, check if we should maintain contact with moving platform
+        if not collision_occurred and self._standing_on_platform and self._platform_contact_buffer > 0:
+            moving_platform = self._standing_on_platform
+            if hasattr(moving_platform, 'platform_type') and moving_platform.platform_type == "moving":
+                # Try to maintain contact with the moving platform
+                if self._try_maintain_moving_platform_contact(moving_platform):
+                    new_grounded = True
+                    collision_occurred = True
+                else:
+                    # Lost contact with moving platform
+                    self._standing_on_platform = None
+                    self._platform_contact_buffer = 0.0
+        
+        # Clear platform tracking if not grounded
+        if not new_grounded:
+            self._standing_on_platform = None
+            self._platform_contact_buffer = 0.0
+        
+        self.grounded = new_grounded
+        return new_grounded, collision_occurred
+
+    def _resolve_horizontal_collisions(self, platforms: List[object]) -> bool:
+        """
+        Handle horizontal (side) collisions with platforms.
+        When player hits the side of a platform, push them back and stop horizontal movement.
+        
+        Returns:
+            True if a horizontal collision occurred
+        """
+        player_rect = self.rect
+        collision_occurred = False
+        
+        for platform in platforms:
+            platform_rect = platform.rect
+            
+            # Check if player is overlapping with platform
+            if not player_rect.colliderect(platform_rect):
+                continue
+            
+            # Calculate overlap amounts
+            overlap_left = player_rect.right - platform_rect.left
+            overlap_right = platform_rect.right - player_rect.left
+            overlap_top = player_rect.bottom - platform_rect.top
+            overlap_bottom = platform_rect.bottom - player_rect.top
+            
+            # Check if this is primarily a horizontal collision
+            # (horizontal overlap is smaller than vertical overlap)
+            min_horizontal_overlap = min(overlap_left, overlap_right)
+            min_vertical_overlap = min(overlap_top, overlap_bottom)
+            
+            # Only treat as horizontal collision if horizontal overlap is smaller
+            # and there's significant vertical overlap (player is beside the platform)
+            if (min_horizontal_overlap < min_vertical_overlap and 
+                min_vertical_overlap > PLAYER_H * 0.3):  # At least 30% vertical overlap
+                
+                # Determine which side we hit and push back
+                if overlap_left < overlap_right:
+                    # Hit the left side of platform - push player left
+                    self.x = platform_rect.left - PLAYER_W - 1
+                else:
+                    # Hit the right side of platform - push player right  
+                    self.x = platform_rect.right + 1
+                
+                # Stop any horizontal momentum (if the game had horizontal movement)
+                # Since this is a runner game, we mainly just position the player
+                collision_occurred = True
+                
+                # Optional: Add a small vertical "bounce" effect for better feel
+                if abs(self.vy) < 50:  # Only if not moving fast vertically
+                    bounce_strength = 30.0
+                    if self.grav_dir > 0:
+                        self.vy = -bounce_strength  # Bounce up slightly
+                    else:
+                        self.vy = bounce_strength   # Bounce down slightly
+                
+                break  # Handle one collision at a time
+        
+        return collision_occurred
+
+    def _try_maintain_moving_platform_contact(self, platform: object) -> bool:
+        """
+        Try to maintain contact with a moving platform even if slightly separated.
+        This handles the case where the platform moves faster than the physics update.
+        """
+        player_rect = self.rect
+        platform_rect = platform.rect
+        
+        # Check if we're still close enough horizontally
+        HORIZONTAL_TOLERANCE = 8  # pixels
+        if (player_rect.right < platform_rect.left - HORIZONTAL_TOLERANCE or 
+            player_rect.left > platform_rect.right + HORIZONTAL_TOLERANCE):
             return False
-
-        X_STICK = 8  # tolérance horizontale (px) pour suivre la plateforme qui bouge
-        EPS = 1
-
-        # Calcul du y cible en fonction de la face support
-        if self._support_face == +1:       # sol: on pose le bas du joueur sur top de la plateforme
-            y_target = self._support_y - PLAYER_H
-        else:                               # plafond: on pose le haut du joueur sur bottom de la plateforme
-            y_target = self._support_y
-
-        # Chercher une plateforme à la bonne altitude (top/bottom) encore proche en X
-        for pr in platforms:
-            pr_in = self._inner_rect(pr)
-            if self._support_face == +1 and pr_in.top == int(self._support_y):
-                if me_now.right >= pr_in.left - X_STICK and me_now.left <= pr_in.right + X_STICK:
-                    # snap doux sur la surface
-                    self.y = y_target
-                    self.vy = 0.0
-                    self.grounded = (self.grav_dir > 0)
-                    return True
-            elif self._support_face == -1 and pr_in.bottom == int(self._support_y):
-                if me_now.right >= pr_in.left - X_STICK and me_now.left <= pr_in.right + X_STICK:
-                    self.y = y_target
-                    self.vy = 0.0
-                    self.grounded = (self.grav_dir < 0)
-                    return True
+        
+        # Check vertical proximity and adjust position
+        VERTICAL_TOLERANCE = 12  # pixels
+        
+        if self.grav_dir > 0:  # Standing on top
+            distance_to_top = abs(player_rect.bottom - platform_rect.top)
+            if distance_to_top <= VERTICAL_TOLERANCE:
+                # Snap back to platform top
+                self.y = platform_rect.top - PLAYER_H
+                self.vy = 0.0
+                return True
+        else:  # Hanging from bottom
+            distance_to_bottom = abs(player_rect.top - platform_rect.bottom)
+            if distance_to_bottom <= VERTICAL_TOLERANCE:
+                # Snap back to platform bottom
+                self.y = platform_rect.bottom
+                self.vy = 0.0
+                return True
+        
         return False
 
-    def resolve_collisions_swept(self, prev_y: float, platforms: List[pygame.Rect]) -> Tuple[bool, bool]:
+    def resolve_collisions_swept(self, prev_y: float, platforms: List[object]) -> Tuple[bool, bool]:
         """
-        Résolution **verticale uniquement** (runner à X fixe) avec:
-          - skin latéral (ignore les contacts côté),
-          - snapping directionnel (sol si on descend, plafond si on monte),
-          - "stick" temporaire pour suivre une plateforme qui bouge.
+        Legacy method name kept for compatibility with existing code.
+        Calls the new collision resolution system.
         """
-        EPS = 2  # petite tolérance d'arrondi
-        me_before = pygame.Rect(int(self.x), int(prev_y), PLAYER_W, PLAYER_H)
-        me_now = self.rect
-        grounded = False
-
-        moving_down = (self.vy > 0.0) or (abs(self.vy) < 1e-6 and self.grav_dir > 0)
-        moving_up   = (self.vy < 0.0) or (abs(self.vy) < 1e-6 and self.grav_dir < 0)
-
-        # 0) Tentative de "stick" si on en a un actif (utile sur plateformes mobiles)
-        if self._try_stick_to_support(me_now, platforms):
-            return True, False  # déjà reposé proprement
-
-        # 1) Résolution verticale prioritaire, directionnelle
-        landed = False
-        if moving_down:
-            for pr in platforms:
-                pr_in = self._inner_rect(pr)
-                # besoin d'un chevauchement horizontal (avec skin) pour un contact vertical
-                if me_now.right <= pr_in.left or me_now.left >= pr_in.right:
-                    continue
-                if me_before.bottom <= pr_in.top and me_now.bottom >= pr_in.top - EPS:
-                    # poser sur le sol
-                    self.y = pr_in.top - PLAYER_H
-                    self.vy = 0.0
-                    grounded = (self.grav_dir > 0)
-                    me_now = self.rect
-                    landed = True
-                    # activer le "stick" pour suivre cette surface qui bouge
-                    self._stick_time = 0.08   # ~80 ms
-                    self._support_y = float(pr_in.top)
-                    self._support_face = +1
-                    break
-
-        elif moving_up:
-            for pr in platforms:
-                pr_in = self._inner_rect(pr)
-                if me_now.right <= pr_in.left or me_now.left >= pr_in.right:
-                    continue
-                if me_before.top >= pr_in.bottom and me_now.top <= pr_in.bottom + EPS:
-                    # coller au plafond
-                    self.y = pr_in.bottom
-                    self.vy = 0.0
-                    grounded = (self.grav_dir < 0)
-                    me_now = self.rect
-                    landed = True
-                    self._stick_time = 0.08
-                    self._support_y = float(pr_in.bottom)
-                    self._support_face = -1
-                    break
-
-        # 2) Si pas d'atterrissage/contact, on est en l'air → on coupe le stick
-        if not landed:
-            grounded = False
-            self._support_y = None
-            self._support_face = 0
-            # (la décroissance de _stick_time se fait dans update_physics)
-
-        self.grounded = grounded
-        return grounded, False
+        return self.resolve_collisions_with_platforms(platforms)
