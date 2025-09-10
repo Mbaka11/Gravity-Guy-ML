@@ -11,157 +11,32 @@ from src.env.gg_env import GGEnv
 
 def heuristic_action(obs, info_prev: dict, state: dict) -> int:
     """
-    Original heuristic - simple and effective.
-    Flip when danger (lookahead clearance) is clearly high (HI).
-    Keep requesting action=1 every frame until a flip actually occurs (sticky).
-    Disarm once it's clearly safe again (LO).
+    Heuristique simple et efficace, 100% côté rollout :
+    - On s'arme (arm) quand on détecte un trou à l'avance via les probes (déjà fournies dans info_prev).
+    - Une fois armé, on renvoie 1 (flip) à chaque frame jusqu'à ce que le flip se produise (did_flip).
+    - Puis on relâche.
     """
-    _, _, _, p1, p2, p3 = obs
-    # weight nearer probes more → earlier warning
-    danger = max(0.8 * p1, 0.5 * p2, 0.3 * p3)
+    grounded = info_prev.get("grounded", False)
+    # Les "probes" (p1, p2, p3) sont déjà calculées dans l'env et mises dans info_prev.
+    # On les interprète simplement : plus petit => plus dangereux.
+    p1, p2, p3 = info_prev.get("probes", (1.0, 1.0, 1.0))
 
-    HI, LO = 0.30, 0.15
-    did_flip = bool(info_prev.get("did_flip", False))
+    # Armement assez tôt : loin (p3), puis moyen (p2), puis près (p1)
+    # Seuils prudents (à ajuster si besoin) :
+    ARM_FAR  = 0.35
+    ARM_MID  = 0.25
+    ARM_NEAR = 0.18
 
-    # If we were waiting for a flip, keep requesting until it actually fires.
-    if state.get("pending_flip", False):
-        if did_flip:                  # flip executed last step
-            state["pending_flip"] = False
-            return 0
-        return 1                      # keep trying every frame
+    if grounded and (p3 < ARM_FAR or p2 < ARM_MID or p1 < ARM_NEAR):
+        state["arm"] = True
 
-    # Arm when it looks dangerous; start requesting immediately
-    if danger > HI:
-        state["pending_flip"] = True
-        return 1
-
-    # Disarm when clearly safe again
-    if danger < LO:
-        state["pending_flip"] = False
-
-    return 0
-
-def improved_heuristic_action(obs, info_prev: dict, state: dict) -> int:
-    """
-    Improved heuristic - more conservative and smarter about timing.
-    Key improvements:
-    1. Slightly more aggressive thresholds
-    2. Velocity awareness
-    3. Better flip management
-    """
-    y_norm, vy_norm, grav_dir, p1, p2, p3 = obs
-    
-    did_flip = bool(info_prev.get("did_flip", False))
-    
-    # === ENHANCED DANGER CALCULATION ===
-    # Base danger with slightly different weighting
-    base_danger = max(0.85 * p1, 0.55 * p2, 0.25 * p3)
-    
-    # Velocity consideration: if moving fast toward obstacles, be more cautious
-    velocity_factor = 1.0
-    if abs(vy_norm) > 0.4:  # Moving fast in any direction
-        velocity_factor = 1.2
-    
-    danger = min(1.0, base_danger * velocity_factor)
-    
-    # === SLIGHTLY MORE AGGRESSIVE THRESHOLDS ===
-    HI, LO = 0.25, 0.12  # vs original 0.30, 0.15
-    
-    # === ANTI-THRASHING LOGIC ===
-    flip_count = state.get("recent_flips", 0)
-    
-    # Decay flip count over time
-    if "last_flip_time" not in state:
-        state["last_flip_time"] = 0
-    
-    state["last_flip_time"] += 1
-    if state["last_flip_time"] > 240:  # Reset every 2 seconds at 120fps
-        state["recent_flips"] = max(0, flip_count - 1)
-        state["last_flip_time"] = 0
-    
-    # === SAME STICKY LOGIC AS ORIGINAL ===
-    pending = state.get("pending_flip", False)
-    
-    if pending:
-        if did_flip:
-            state["pending_flip"] = False
-            state["recent_flips"] = state.get("recent_flips", 0) + 1
+    if state.get("arm", False):
+        # Sticky jusqu’à ce que l’env confirme que le flip a été exécuté
+        if info_prev.get("did_flip", False):
+            state["arm"] = False
             return 0
         return 1
-    
-    # Only flip if we haven't been thrashing
-    if danger > HI:
-        if state.get("recent_flips", 0) < 5:  # Reasonable flip limit
-            state["pending_flip"] = True
-            return 1
-    
-    if danger < LO:
-        state["pending_flip"] = False
-    
-    return 0
 
-def conservative_heuristic_action(obs, info_prev: dict, state: dict) -> int:
-    """
-    Ultra-conservative heuristic - only flips when absolutely necessary.
-    Should be very stable but might miss some opportunities.
-    """
-    _, _, _, p1, p2, p3 = obs
-    
-    did_flip = bool(info_prev.get("did_flip", False))
-    
-    # Only care about immediate danger (nearest probe)
-    danger = p1
-    
-    # Very tight thresholds - only flip when obstacle is very close
-    HI, LO = 0.20, 0.08
-    
-    pending = state.get("pending_flip", False)
-    
-    if pending:
-        if did_flip:
-            state["pending_flip"] = False
-            return 0
-        return 1
-    
-    if danger > HI:
-        state["pending_flip"] = True
-        return 1
-    
-    if danger < LO:
-        state["pending_flip"] = False
-    
-    return 0
-
-def aggressive_heuristic_action(obs, info_prev: dict, state: dict) -> int:
-    """
-    More aggressive heuristic - flips earlier to stay safer.
-    Might flip more often but should avoid close calls.
-    """
-    _, _, _, p1, p2, p3 = obs
-    
-    did_flip = bool(info_prev.get("did_flip", False))
-    
-    # Weight all probes more heavily for earlier warning
-    danger = max(0.9 * p1, 0.7 * p2, 0.4 * p3)
-    
-    # More aggressive thresholds
-    HI, LO = 0.40, 0.20  # vs original 0.30, 0.15
-    
-    pending = state.get("pending_flip", False)
-    
-    if pending:
-        if did_flip:
-            state["pending_flip"] = False
-            return 0
-        return 1
-    
-    if danger > HI:
-        state["pending_flip"] = True
-        return 1
-    
-    if danger < LO:
-        state["pending_flip"] = False
-    
     return 0
 
 def run_policy_test(
@@ -194,9 +69,6 @@ def run_policy_test(
     # Policy function mapping
     policy_functions = {
         "heuristic": heuristic_action,
-        "improved": improved_heuristic_action,
-        "conservative": conservative_heuristic_action,
-        "aggressive": aggressive_heuristic_action,
     }
 
     totals, dists, all_flips = [], [], []
@@ -210,7 +82,7 @@ def run_policy_test(
             total_r, flips = 0.0, 0
             
             # CRITICAL: Fresh state for each episode
-            state = {"pending_flip": False}
+            state = {"pending_flip": False, "action_history": []}
             info = {}
             
             for t in range(steps_per_ep):
@@ -221,6 +93,9 @@ def run_policy_test(
                     a = policy_functions[policy](obs, info, state)
                 else:
                     raise ValueError(f"Unknown policy: {policy}")
+
+                # Record the action
+                state["action_history"].append(a)
 
                 obs, r, done, info = env.step(a)
 
@@ -249,6 +124,8 @@ def run_policy_test(
                 "cooldown": float(info.get("cooldown", 0.0)),
                 "grav_dir": int(info.get("grav_dir", 0)),
                 "probes": list(info.get("probes", [])),
+                # Full action history for replay
+                "actions": state["action_history"],
             }
             f.write(json.dumps(rec) + "\n")
 
@@ -270,9 +147,6 @@ def run_comparison():
     policies = [
         ("random", {"flip_prob": 0.12}),
         ("heuristic", {}),
-        ("improved", {}), 
-        ("conservative", {}),
-        ("aggressive", {}),
     ]
     
     print("=== POLICY COMPARISON ===")
@@ -291,13 +165,6 @@ def run_comparison():
         )
 
 if __name__ == "__main__":
-    # Quick test with short time limit
-    # print("=== QUICK TEST (10s limit) ===")
-    # run_policy_test(policy="random", n_episodes=3, max_time_s=30.0)
-    # run_policy_test(policy="heuristic", n_episodes=3, max_time_s=30.0)
-    # run_policy_test(policy="improved", n_episodes=3, max_time_s=30.0)
-
     print("\n" + "="*50)
-    
     # Full comparison with longer time limit
     run_comparison()
