@@ -52,6 +52,8 @@ from typing import Optional, List, Tuple
 import numpy as np
 import pygame
 
+import re
+
 from src.env.gg_env_v2 import GGEnv
 from src.env.observations_v2 import build_observation_v2
 from src.game.config import (
@@ -130,6 +132,16 @@ def _draw_overlay(env: GGEnv, step_idx: int, action: Optional[int]):
         surf.blit(font.render(txt, True, (210, 230, 255)), (20, y0 + i*20))
 
     pygame.display.flip()
+
+def infer_seed_from_trace(path_str: str):
+    m = re.search(r"seed_(\d+)", Path(path_str).name)
+    return int(m.group(1)) if m else None
+
+def load_actions_from_trace(path_str: str):
+    p = Path(path_str)
+    if p.suffix.lower() == ".npy":
+        return np.load(p).astype(int).tolist()
+    raise ValueError(f"Unsupported trace format: {p.suffix} (expected .npy)")
 
 def replay_episode(
     seed: int,
@@ -224,28 +236,32 @@ def main():
                     help="Override frame_skip. If <0, use meta or default=4")
     ap.add_argument("--slow", action="store_true", help="Slow display (~15 fps) for readability")
     args = ap.parse_args()
-
+    policy_label = args.policy
+    
     out_dir = Path(args.out_dir)
 
-    # Resolve action file
+    # Resolve action file + load actions (trace mode takes precedence)
     if args.trace:
         trace_path = Path(args.trace)
         if not trace_path.exists():
             raise FileNotFoundError(f"Trace file not found: {trace_path}")
-        # Try to infer seed/policy from file name when possible
+
+        actions = load_actions_from_trace(trace_path)
+
         if args.seed is None:
-            try:
-                args.seed = int(trace_path.stem.split("_")[0])
-            except Exception:
-                pass
+            args.seed = infer_seed_from_trace(trace_path)
+        policy_label = "trace"
+
+        if args.seed is None:
+            print("[warn] Could not infer seed from trace filename; pass --seed explicitly for a perfect match.")
     else:
         if args.seed is None:
             raise SystemExit("Please provide --seed or --trace")
-        trace_path = _find_trace(out_dir, args.policy, args.seed)
 
-    # Load actions
-    actions = np.load(trace_path)
-    if actions.ndim != 1:
+        trace_path = _find_trace(out_dir, args.policy, args.seed)
+        actions = load_actions_from_trace(trace_path)
+
+    if isinstance(actions, np.ndarray) and actions.ndim != 1:
         raise ValueError(f"Expected 1D action array, got shape {actions.shape}")
 
     # Determine frame_skip
@@ -260,7 +276,7 @@ def main():
                 except Exception:
                     pass
 
-    print(f"Replaying seed={args.seed}  policy={args.policy}  steps={len(actions)}  frame_skip={fs}")
+    print(f"Replaying seed={args.seed}  policy={policy_label}  steps={len(actions)}  frame_skip={fs}")
     print("Controls: SPACE pause/resume | N step (when paused) | R restart | ESC quit")
 
     replay_episode(seed=args.seed, actions=actions, frame_skip=fs, slow=args.slow)
