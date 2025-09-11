@@ -1,0 +1,57 @@
+{
+  "run_id": "20250911_015257",
+  "sim_fps": 60,
+  "frame_skip": 4,
+  "decision_hz": 15.0,
+  "time_limit_s": 30,
+  "max_steps": 450,
+  "eval_seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110,
+    111,
+    112,
+    113,
+    114,
+    115,
+    116,
+    117,
+    118,
+    119,
+    120
+  ],
+  "train_seed_range": [
+    1000,
+    2000
+  ],
+  "global_seed": 42,
+  "dqn_cfg": {
+    "obs_dim": 15,
+    "num_actions": 2,
+    "hidden_sizes": [
+      256,
+      256
+    ],
+    "gamma": 0.99,
+    "lr": 0.001,
+    "batch_size": 256,
+    "replay_size": 100000,
+    "train_every": 4,
+    "target_update_every": 1000,
+    "grad_clip_norm": 10.0,
+    "warmup_steps": 5000,
+    "eps_start": 1.0,
+    "eps_end": 0.05,
+    "eps_decay_steps": 100000,
+    "total_decisions": 1000000,
+    "eval_every": 50000,
+    "seed": 42
+  }
+}
