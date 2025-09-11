@@ -1,0 +1,5 @@
+seed=119
+frame_skip=4
+policy=heuristic
+action_rng_seed=-1
+steps_limit=10000

@@ -1,170 +1,238 @@
-# experiments/sanity_rollout.py
+# /experiments/sanity_rollout.py
 """
-Run a few headless episodes with different policies and save per-episode metrics.
-Output: experiments/runs/<timestamp>_<policy>.jsonl  (one JSON object per episode)
+Sanity rollouts for GGEnv v2:
+- Runs RANDOM and/or TINY-HEURISTIC policies over fixed seeds
+- Writes an episodes CSV for notebook analysis
+- Saves per-episode action sequences (and optionally observations) for exact replay
+
+Usage examples (from repo root):
+  # Run both policies over 20 default seeds, frame_skip=4, save traces:
+  python -m experiments.sanity_rollout --policies both --save-traces
+
+  # Only heuristic, custom seeds, also save observations for deeper debugging:
+  python -m experiments.sanity_rollout --policies heuristic --seeds 111,222,333 --save-traces --save-obs
+
+  # Quick random-only smoke with fewer steps and no files:
+  python -m experiments.sanity_rollout --policies random --steps 300 --out-dir /tmp/sanity --save-traces
 """
 
 from __future__ import annotations
-import os, time, json, random
-from typing import Optional
-from src.env.gg_env import GGEnv
+import argparse
+import csv
+import os
+from pathlib import Path
+from typing import List, Tuple, Optional
 
-def heuristic_action(obs, info_prev: dict, state: dict) -> int:
+import numpy as np
+
+from src.env.gg_env_v2 import GGEnv  # assumes you placed the env here
+
+
+# ------------------------ Policies ------------------------
+
+def random_policy_init(action_seed: int):
+    rng = np.random.RandomState(action_seed)
+    def act(_obs: np.ndarray) -> int:
+        return int(rng.randint(0, 2))  # 0 or 1
+    return act
+
+def tiny_heuristic_policy_init():
     """
-    Heuristique simple et efficace, 100% côté rollout :
-    - On s'arme (arm) quand on détecte un trou à l'avance via les probes (déjà fournies dans info_prev).
-    - Une fois armé, on renvoie 1 (flip) à chaque frame jusqu'à ce que le flip se produise (did_flip).
-    - Puis on relâche.
+    Very small rule:
+      - If gravity is down: flip only when bottom near-probe shows danger
+        (bottom spike at +120 OR no floor at +120), and target lane not spiky at +120.
+      - If gravity is up: mirror for top.
     """
-    grounded = info_prev.get("grounded", False)
-    # Les "probes" (p1, p2, p3) sont déjà calculées dans l'env et mises dans info_prev.
-    # On les interprète simplement : plus petit => plus dangereux.
-    p1, p2, p3 = info_prev.get("probes", (1.0, 1.0, 1.0))
+    def act(obs: np.ndarray) -> int:
+        grav = obs[2]  # +1 down, -1 up
+        # Near probe (+120) lives at indices 3..6
+        ceil_n, floor_n, spike_top, spike_bot = obs[3], obs[4], obs[5], obs[6]
+        if grav > 0:  # currently on bottom lane
+            cur_danger = (spike_bot == 1.0) or (floor_n >= 0.999)  # no floor sentinel
+            target_safe = (spike_top == 0.0) and (ceil_n > 0.0)    # ceiling exists & no spike
+            return 1 if (cur_danger and target_safe) else 0
+        else:         # currently on top lane
+            cur_danger = (spike_top == 1.0) or (ceil_n <= 0.001)   # no ceiling sentinel
+            target_safe = (spike_bot == 0.0) and (floor_n < 1.0)   # floor exists & no spike
+            return 1 if (cur_danger and target_safe) else 0
+    return act
 
-    # Armement assez tôt : loin (p3), puis moyen (p2), puis près (p1)
-    # Seuils prudents (à ajuster si besoin) :
-    ARM_FAR  = 0.35
-    ARM_MID  = 0.25
-    ARM_NEAR = 0.18
 
-    if grounded and (p3 < ARM_FAR or p2 < ARM_MID or p1 < ARM_NEAR):
-        state["arm"] = True
+# ------------------------ Rollout core ------------------------
 
-    if state.get("arm", False):
-        # Sticky jusqu’à ce que l’env confirme que le flip a été exécuté
-        if info_prev.get("did_flip", False):
-            state["arm"] = False
-            return 0
-        return 1
+def ensure_dir(p: Path):
+    p.mkdir(parents=True, exist_ok=True)
 
-    return 0
+def write_episode_row(csv_path: Path, header: List[str], row: List):
+    exists = csv_path.exists()
+    with csv_path.open("a", newline="") as f:
+        w = csv.writer(f)
+        if not exists:
+            w.writerow(header)
+        w.writerow(row)
 
-def run_policy_test(
-    n_episodes: int = 8,
-    steps_per_ep: int = 1200,
-    flip_prob: float = 0.12,
-    level_seed: Optional[int] = None,
-    rng_seed: Optional[int] = None,
-    policy: str = "random",
-    max_time_s: float = 10.0,
-):
+def run_one_episode(policy_name: str,
+                    seed: int,
+                    frame_skip: int,
+                    steps_limit: int,
+                    save_traces: bool,
+                    save_obs: bool,
+                    out_dir: Path) -> Tuple[int, float, float, bool, bool, Optional[str], float]:
     """
-    Run episodes with a specific policy and save results.
-    
-    Args:
-        n_episodes: Number of episodes to run
-        steps_per_ep: Maximum steps per episode
-        flip_prob: Probability of random flip (only used for random policy)
-        level_seed: Seed for level generation (None = random each episode)
-        rng_seed: Seed for random actions (None = don't seed)
-        policy: Policy name ("random", "heuristic", "improved", "conservative", "aggressive")
-        max_time_s: Maximum time per episode in seconds
+    Returns: (ep_len, ret_sum, distance_px, terminated, truncated, death_cause, grounded_ratio)
+    Also writes traces to disk if requested.
     """
-    if rng_seed is not None:
-        random.seed(rng_seed)
+    # For fair parity with training cadence, let env carry its own time limit (30s default).
+    env = GGEnv(frame_skip=frame_skip)
 
-    os.makedirs("experiments/runs", exist_ok=True)
-    out_path = f"experiments/runs/{int(time.time())}_{policy}.jsonl"
+    # Policy init
+    if policy_name == "random":
+        # Make action RNG seed a function of seed for determinism
+        action_seed = 10_000 + seed
+        policy = random_policy_init(action_seed)
+    elif policy_name == "heuristic":
+        action_seed = -1
+        policy = tiny_heuristic_policy_init()
+    else:
+        raise ValueError("Unknown policy")
 
-    # Policy function mapping
-    policy_functions = {
-        "heuristic": heuristic_action,
-    }
+    # Storage for replay
+    actions: List[int] = []
+    obs_list: List[np.ndarray] = [] if save_obs else []
 
-    totals, dists, all_flips = [], [], []
-    
-    with open(out_path, "w", encoding="utf-8") as f:
-        for ep in range(n_episodes):
-            # Create fresh environment for each episode
-            env = GGEnv(level_seed=level_seed, max_time_s=max_time_s, flip_penalty=0.01, dt=1/120)
-            obs = env.reset()
+    ret_sum = 0.0
+    grounded_count = 0
+    ep_len = 0
+    death_cause = None
 
-            total_r, flips = 0.0, 0
-            
-            # CRITICAL: Fresh state for each episode
-            state = {"pending_flip": False, "action_history": []}
-            info = {}
-            
-            for t in range(steps_per_ep):
-                # Get action based on policy
-                if policy == "random":
-                    a = 1 if random.random() < flip_prob else 0
-                elif policy in policy_functions:
-                    a = policy_functions[policy](obs, info, state)
-                else:
-                    raise ValueError(f"Unknown policy: {policy}")
+    try:
+        obs, info = env.reset(seed=seed)
+        if save_obs:
+            obs_list.append(obs.copy())
 
-                # Record the action
-                state["action_history"].append(a)
+        for t in range(steps_limit):
+            a = policy(obs)
+            actions.append(int(a))
 
-                obs, r, done, info = env.step(a)
+            obs, r, term, trunc, info = env.step(a)
+            ret_sum += float(r)
+            ep_len += 1
+            grounded_count += int(bool(info.get("grounded", False)))
+            death_cause = info.get("death_cause", None)
 
-                # Count actual flips, not attempts
-                if info.get("did_flip", False):
-                    flips += 1
+            if save_obs:
+                obs_list.append(obs.copy())
 
-                total_r += r
-                if done:
-                    break
+            if term or trunc:
+                break
 
-            # Record episode results
-            rec = {
-                "policy": policy,
-                "episode": ep,
-                "steps": t + 1,
-                "flips": flips,
-                "total_return": round(float(total_r), 3),
-                "time_s": round(float(info.get("time_s", 0.0)), 3),
-                "distance_px": int(info.get("distance_px", 0)),
-                "level_seed": info.get("level_seed"),
-                "out_of_bounds": bool(info.get("out_of_bounds", False)),
-                "time_up": bool(info.get("time_up", False)),
-                # Final state instrumentation:
-                "grounded": bool(info.get("grounded", False)),
-                "cooldown": float(info.get("cooldown", 0.0)),
-                "grav_dir": int(info.get("grav_dir", 0)),
-                "probes": list(info.get("probes", [])),
-                # Full action history for replay
-                "actions": state["action_history"],
-            }
-            f.write(json.dumps(rec) + "\n")
+        distance_px = float(info.get("distance_px", 0.0))
+        terminated = bool(term)
+        truncated = bool(trunc)
+        grounded_ratio = grounded_count / max(1, ep_len)
 
-            totals.append(total_r)
-            dists.append(info.get("distance_px", 0))
-            all_flips.append(flips)
+    finally:
+        env.close()
 
-    # Print summary
-    print(f"Saved {n_episodes} episodes to {out_path}")
-    if totals:
-        avg_r = sum(totals) / len(totals)
-        avg_d = sum(dists) / len(dists)
-        avg_f = sum(all_flips) / len(all_flips)
-        max_d = max(dists)
-        print(f"{policy.upper():>12}: avg_dist={avg_d:6.1f}px  avg_return={avg_r:7.2f}  avg_flips={avg_f:4.1f}  max_dist={max_d:4.0f}px")
+    # Save traces
+    if save_traces:
+        trace_dir = out_dir / "traces" / policy_name
+        ensure_dir(trace_dir)
+        np.save(trace_dir / f"{seed}_actions.npy", np.asarray(actions, dtype=np.int8))
+        if save_obs:
+            np.save(trace_dir / f"{seed}_obs.npy", np.asarray(obs_list, dtype=np.float32))
 
-def run_comparison():
-    """Run all policies for comparison"""
-    policies = [
-        ("random", {"flip_prob": 0.12}),
-        ("heuristic", {}),
+        # Also write a tiny metadata sidecar for convenience
+        meta_lines = [
+            f"seed={seed}",
+            f"frame_skip={frame_skip}",
+            f"policy={policy_name}",
+            f"action_rng_seed={action_seed}",
+            f"steps_limit={steps_limit}",
+        ]
+        (trace_dir / f"{seed}_meta.txt").write_text("\n".join(meta_lines), encoding="utf-8")
+
+    return ep_len, ret_sum, distance_px, terminated, truncated, death_cause, grounded_ratio
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--policies", type=str, default="both",
+                    choices=["random", "heuristic", "both"],
+                    help="Which policy to run")
+    ap.add_argument("--seeds", type=str, default="",
+                    help="Comma-separated seeds. If empty, uses 20 defaults: 101..120")
+    ap.add_argument("--frame-skip", type=int, default=4,
+                    help="Sim frames per decision step")
+    ap.add_argument("--steps", type=int, default=10_000,
+                    help="Hard cap on decision steps (env may truncate earlier)")
+    ap.add_argument("--out-dir", type=str, default="experiments/runs",
+                    help="Directory to store episodes.csv and traces/")
+    ap.add_argument("--save-traces", action="store_true",
+                    help="Save action sequences (and optional obs) for replay")
+    ap.add_argument("--save-obs", action="store_true",
+                    help="Also save observations per step (larger files)")
+    args = ap.parse_args()
+
+    out_dir = Path(args.out_dir)
+    ensure_dir(out_dir)
+
+    # Seeds
+    if args.seeds.strip():
+        seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    else:
+        seeds = list(range(101, 121))  # 20 fixed eval seeds by default
+
+    # Episode CSV
+    episodes_csv = out_dir / "episodes.csv"
+    header = [
+        "env_name", "env_version", "obs_version",
+        "policy_name", "seed",
+        "frame_skip", "sim_fps", "decision_hz",
+        "episode_len_decisions", "return_sum", "distance_px",
+        "terminated", "truncated", "death_cause",
+        "grounded_ratio"
     ]
-    
-    print("=== POLICY COMPARISON ===")
-    print("Running 8 episodes per policy with 30s time limit...")
-    print()
-    
-    for policy, kwargs in policies:
-        run_policy_test(
-            n_episodes=8,
-            steps_per_ep=3600,  # 30 seconds at 120fps
-            level_seed=None,    # Random levels
-            rng_seed=0,         # Reproducible random actions
-            policy=policy,
-            max_time_s=30.0,    # Longer time limit to see true potential
-            **kwargs
-        )
+    # Constants for metadata rows
+    env_name = "GGEnv"
+    env_version = "v2"
+    obs_version = "v2"
+    sim_fps = 60
+    decision_hz = sim_fps / max(1, args.frame_skip)
+
+    to_run = ["random", "heuristic"] if args.policies == "both" else [args.policies]
+
+    print(f"Running policies={to_run} on {len(seeds)} seeds "
+          f"(frame_skip={args.frame_skip}, decision_hz≈{decision_hz:.1f})")
+    print(f"Writing summaries to {episodes_csv} and traces under {out_dir}/traces/")
+
+    for policy_name in to_run:
+        for seed in seeds:
+            ep_len, ret_sum, dist, terminated, truncated, death_cause, g_ratio = run_one_episode(
+                policy_name=policy_name,
+                seed=seed,
+                frame_skip=args.frame_skip,
+                steps_limit=args.steps,
+                save_traces=args.save_traces,
+                save_obs=args.save_obs,
+                out_dir=out_dir
+            )
+
+            row = [
+                env_name, env_version, obs_version,
+                policy_name, seed,
+                args.frame_skip, sim_fps, decision_hz,
+                ep_len, f"{ret_sum:.1f}", f"{dist:.1f}",
+                int(terminated), int(truncated), (death_cause or ""),
+                f"{g_ratio:.3f}",
+            ]
+            write_episode_row(episodes_csv, header, row)
+
+            print(f"[{policy_name}] seed={seed}  len={ep_len}  dist={dist:.1f}  "
+                  f"ret={ret_sum:.1f}  term={terminated} trunc={truncated}  cause={death_cause}")
+
+    print("✓ Sanity rollouts complete")
+
 
 if __name__ == "__main__":
-    print("\n" + "="*50)
-    # Full comparison with longer time limit
-    run_comparison()
+    main()

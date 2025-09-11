@@ -1,0 +1,5 @@
+seed=108
+frame_skip=4
+policy=random
+action_rng_seed=10108
+steps_limit=10000
