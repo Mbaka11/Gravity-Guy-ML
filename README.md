@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./fun/8f2ebc85b651058e0b03d5378d780143.jpg" alt="GravityGuyML banner" width="100%">
+  <img src="./fun/8f2ebc85b651058e0b03d5378d780143.png" alt="GravityGuyML banner" width="100%">
 </p>
 
 # GravityGuyML — RL + Gymnasium + Pygame
